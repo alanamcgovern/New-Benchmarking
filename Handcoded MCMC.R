@@ -1945,17 +1945,17 @@ grad_log_target_4.1_alphaR <- function(data,Yplus,pop_dat,alphaU,alphaR,b,d,mu_R
 }
 
 
-tau_init = 25
-d_init = 0.1
-alphaU_init = -6
-alphaR_init = -5
-prop_k_alpha = 1e-4
-prop_k_b = 1e-5
-prop_k_logd = 0.1
-data_list = data_list
-n_iter=1000
-burnin <- 500
-chains=1
+# tau_init = 25
+# d_init = 0.1
+# alphaU_init = -6
+# alphaR_init = -5
+# prop_k_alpha = 1e-4
+# prop_k_b = 1e-5
+# prop_k_logd = 0.1
+# data_list = data_list
+# n_iter=1000
+# burnin <- 500
+# chains=1
 postsamp_Alg4.1_MCMC <- function(tau_init, d_init, alphaU_init, alphaR_init, #initial values
                                  prop_sd_d=NULL, prop_sd_alpha=NULL, prop_sd_b=NULL, # for random walk proposals
                                  prop_k_alpha=NULL, prop_k_logd=NULL, prop_k_b=NULL, # for MALA proposals
@@ -1968,9 +1968,9 @@ postsamp_Alg4.1_MCMC <- function(tau_init, d_init, alphaU_init, alphaR_init, #in
   #hyperpriors
   a_tau <- 0.01
   b_tau <- 0.01
-  mu_U <- -6
+  mu_U <- -3.5
   sd_U <- 3
-  mu_R <- -5.5
+  mu_R <- -3
   sd_R <- 3
   mu_d <- 0
   sd_d <- 1
@@ -2121,8 +2121,8 @@ postsamp_Alg4.1_MCMC <- function(tau_init, d_init, alphaU_init, alphaR_init, #in
  # n_births_rural_samp <- 20 # number of births sampled from each rural cluster
   
   # intercept (fixed effect) 
-  alphaU <- rnorm(1,-6,0.25)
-  alphaR <- rnorm(1,-5,0.25)
+  alphaU <- rnorm(1,-3.5,0.25)
+  alphaR <- rnorm(1,-3,0.25)
   
   # draw hyperparameters
   tau <- rgamma(1,10,.25)
@@ -2236,6 +2236,392 @@ pdf("/Users/alanamcgovern/Desktop/Research/New Benchmarking/Handcoded MCMC Simul
   abline(h=b[20],col='red')
 } 
 dev.off()  
+
+#######################################################################
+#######################################################################
+# Alg 4.1 with real data! --------------
+## Because we are using 1 stage cluster sampling, we are assuming the only households in a sampled cluster are the ones we observed
+# and each unsampled cluster has same number of households that were observed in sampled clusters
+
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Sierra_Leone/Sierra_Leone_cluster_dat.rda")
+admin2_key <- mod.dat %>% select(admin2,admin2.char,admin2.name) %>% unique()
+
+obs_dat <- mod.dat %>% filter(age==0,years==2010,survey==2019) %>% group_by(cluster) %>% 
+  reframe(N=sum(total),
+          U=as.numeric(I(urban=='urban')),
+          urban=urban,
+          A=unique(admin2),
+          A.name = unique(admin2.name),
+          Y = sum(Y)) %>% unique()
+
+#calculate (obs) births per household in each strata
+pop_dat <- obs_dat %>% group_by(A,A.name,U) %>% summarise(sum(N)) %>% arrange(A,U) %>% rename(admin2.name = A.name)
+# from DHS report -- number of observed HH
+pop_dat$obsHH <- c(628, 364, 498, 390,
+                       572, 130, 576, 312, 
+                       472, 260, 628, 52,
+                       524, 468, 498, 52,
+                       468, 208, 646, 286, 
+                       732, 78, 628, 312,
+                       654, 78, 680, 208,
+                       104, 936, 1430)
+pop_dat$bHHratio <- pop_dat$`sum(N)`/pop_dat$obsHH
+
+# from DHS report -- total number of clusters
+pop_dat$nclusters <- c(708, 325,464,266,
+                       390,71, 615,276,
+                       376, 200, 409, 26,
+                       678, 441, 330, 24,
+                       271, 123, 586, 201,
+                       579, 37, 706, 294,
+                       549, 33, 834, 207,
+                       65, 635, 2139)
+# from DHS report -- choose 24 from each cluster
+pop_dat$N <- round(pop_dat$nclusters*24*pop_dat$bHHratio)
+pop_dat <- pop_dat %>% select(A,admin2.name,U,N)
+
+igme.nmr <- read_csv("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/IGME/igme2022_nmr.csv")
+igme.est <- (igme.nmr %>% filter(iso=='SLE',Quantile=='Median'))$`2010.5`/1000
+Yplus_est <- round(igme.est*sum(pop_dat$N))
+
+data_list <- list(obs_dat = obs_dat, #observed data
+       Yplus = Yplus_est, #ALL deaths
+       pop_strata_dat = pop_dat) # number of births per strata (area x urban)
+
+postsamp_4.1 <- postsamp_Alg4.1_MCMC(tau_init = 25, d_init = 0.1, alphaU_init = -4, alphaR_init = -3,
+                                     #prop_sd_alpha = 0.05, 
+                                     #prop_sd_b = 0.05,
+                                     prop_k_alpha = 2e-3, 
+                                     prop_k_b = 5e-3,
+                                     prop_k_logd = 0.05,
+                                     data_list = data_list, n_iter=50000)
+
+alg4.1.res <- expand_grid(admin2=1:nrow(admin2_key),U=c(0,1))
+alg4.1.res$eta <- median(postsamp_4.1$alphaU)*alg4.1.res$U + median(postsamp_4.1$alphaR)*(1-alg4.1.res$U) + Rfast::colMedians(postsamp_4.1$b)[alg4.1.res$admin2]
+alg4.1.res$rate <- exp(alg4.1.res$eta)
+
+#compare to BB8 model
+# are in the same ballpark, but not really similar -- hard to say anything because we are not assuming correct sampling frame
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Sierra_Leone/Betabinomial/NMR/Sierra_Leone_res_adm2_strat_nmr_bench.rda")
+bb8.res <- bb.res.adm2.strat.nmr.bench$stratified %>% filter(years.num==2010) %>% rename(admin2=area) %>%
+  mutate(U=as.numeric(I(strata=='urban'))) %>%select(admin2,U,median)
+
+alg4.1.res <- full_join(alg4.1.res,bb8.res, by = join_by(admin2, U))
+alg4.1.res %>% ggplot() + geom_point(aes(x=admin2,y=rate,group=factor(U),col=factor(U)),pch=2) + 
+  geom_point(aes(x=admin2,y=median,group=factor(U),col=factor(U)))
+
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Sierra_Leone/Direct/NMR/Sierra_Leone_direct_adm2_nmr.rda")
+
+#######################################################################
+#######################################################################
+# Alg 5.1: P(alphaU,alphaR,b,tau,d|Y+,Y^s,delta) ------
+
+grad_log_target_5.1_b <- function(data,Yplus,pop_dat,area,Y,alphaU,alphaR,b,d,tau){
+  Nr_sum_obs <- sum(data$N*exp(data$U*alphaU + (1-data$U)*alphaR + b[data$A]))
+  Nr_sum <- sum(pop_dat$N*exp(pop_dat$U*alphaU + (1-pop_dat$U)*alphaR + b[pop_dat$A]))
+  
+  Nr_sum_area_obs <- sum(I(data$A==area)*data$N*exp(data$U*alphaU + (1-data$U)*alphaR + b[area]))
+  Nr_sum_area <- sum(I(pop_dat$A==area)*pop_dat$N*exp(pop_dat$U*alphaU + (1-pop_dat$U)*alphaR + b[area]))
+  
+  term1 <- sum(I(data$A==area)*Y[-length(Y)]) - Yplus*Nr_sum_area/Nr_sum
+  term2 <- (Yplus - sum(data$Y))*(Nr_sum_area - Nr_sum_area_obs)/(Nr_sum - Nr_sum_obs)
+  term3 <- (1/d)*Nr_sum_area*(digamma(Yplus + (1/d)*Nr_sum) - digamma((1/d)*Nr_sum) - log(d+1))
+  term4 <- -tau*b[area]
+  return(term1 + term2 + term3 + term4)
+}
+
+grad_log_target_5.1_logd <- function(Yplus,pop_dat,alphaU,alphaR,b,d,mu_d,sd_d){
+  Nr_sum <- sum(pop_dat$N*exp(pop_dat$U*alphaU + (1-pop_dat$U)*alphaR + b[pop_dat$A]))
+  
+  term1 <- (1/(d+1))*(Yplus - Nr_sum)
+  term2 <- (1/d)*Nr_sum*(digamma((1/d)*Nr_sum) - digamma(Yplus + (1/d)*Nr_sum) + log(1+d))
+  term3 <- -(log(d)-mu_d)/sd_d^2
+  return(term1 + term2 + term3)
+}
+
+grad_log_target_5.1_alphaU <- function(data,Yplus,pop_dat,Y,alphaU,alphaR,b,d,mu_U,sd_U){
+  Nr_sum_obs <- sum(data$N*exp(data$U*alphaU + (1-data$U)*alphaR + b[data$A]))
+  Nr_sum <- sum(pop_dat$N*exp(pop_dat$U*alphaU + (1-pop_dat$U)*alphaR + b[pop_dat$A]))
+  
+  Nr_sum_urb_obs <- sum(data$U*data$N*exp(data$U*alphaU + b[data$A]))
+  Nr_sum_urb <- sum(pop_dat$U*pop_dat$N*exp(pop_dat$U*alphaU + b[pop_dat$A]))
+  
+  term1 <- sum(data$U*Y[-length(Y)]) - Yplus*Nr_sum_urb/Nr_sum
+  term2 <- (Yplus - sum(data$Y))*(Nr_sum_urb - Nr_sum_urb_obs)/(Nr_sum - Nr_sum_obs)
+  term3 <- (1/d)*Nr_sum_urb*(digamma(Yplus + (1/d)*Nr_sum) - digamma((1/d)*Nr_sum) - log(d+1))
+  term4 <- -(alphaU - mu_U)/sd_U^2
+  return(term1 + term2 + term3 + term4)
+  
+}
+
+grad_log_target_5.1_alphaR <- function(data,Yplus,pop_dat,Y,alphaU,alphaR,b,d,mu_R,sd_R){
+  Nr_sum_obs <- sum(data$N*exp(data$U*alphaU + (1-data$U)*alphaR + b[data$A]))
+  Nr_sum <- sum(pop_dat$N*exp(pop_dat$U*alphaU + (1-pop_dat$U)*alphaR + b[pop_dat$A]))
+  
+  Nr_sum_rur_obs <- sum((1-data$U)*data$N*exp((1-data$U)*alphaR + b[data$A]))
+  Nr_sum_rur <- sum((1-pop_dat$U)*pop_dat$N*exp((1-pop_dat$U)*alphaR + b[pop_dat$A]))
+  
+  term1 <- sum((1-data$U)*Y[-length(Y)]) - Yplus*Nr_sum_rur/Nr_sum
+  term2 <- (Yplus - sum(data$Y))*(Nr_sum_rur - Nr_sum_rur_obs)/(Nr_sum - Nr_sum_obs)
+  term3 <- (1/d)*Nr_sum_rur*(digamma(Yplus + (1/d)*Nr_sum) - digamma((1/d)*Nr_sum) - log(d+1))
+  term4 <- -(alphaR - mu_R)/sd_R^2
+  return(term1 + term2 + term3 + term4)
+  
+}
+
+tau_init = 25
+d_init = 0.1
+alphaU_init = -3
+alphaR_init = -3
+prop_sd_alpha = 0.05
+prop_sd_b = 0.05
+prop_k_alpha = 2e-3
+prop_k_b = 5e-3
+prop_k_logd = 0.05
+data_list = data_list
+n_iter=1000
+postsamp_Alg5.1_MCMC <- function(tau_init, d_init, alphaU_init, alphaR_init, b_init, Y_init, #initial values
+                                 prop_sd_d=NULL, prop_sd_alpha=NULL, prop_sd_b=NULL, # for random walk proposals
+                                 prop_k_alpha=NULL, prop_k_logd=NULL, prop_k_b=NULL, # for MALA proposals
+                                 data_list, n_iter,burnin=n_iter/2,chains=2){
+  
+  data <- data_list$obs_dat
+  Yplus <- data_list$Yplus
+  pop_dat <- data_list$pop_strata_dat
+  n_areas <- length(unique(data_list$pop_strata_dat$A))
+  #hyperpriors
+  a_tau <- 0.01
+  b_tau <- 0.01
+  mu_U <- -3.5
+  sd_U <- 3
+  mu_R <- -3
+  sd_R <- 3
+  mu_d <- 0
+  sd_d <- 1
+  
+  #set initial values
+  tau_postsamp_t <- c(tau_init, rep(NA,n_iter-1))
+  d_postsamp_t <- c(d_init, rep(NA,n_iter-1))
+  alphaU_postsamp_t <- c(alphaU_init, rep(NA,n_iter-1))
+  alphaR_postsamp_t <- c(alphaR_init, rep(NA,n_iter-1))
+  
+  b_postsamp_t <- rbind(b_init, matrix(NA,n_iter-1,n_areas))
+  
+  Y_postsamp_t <- rbind(Y_init, matrix(NA,n_iter-1,nrow(data)+1))
+  
+  tau_postsamp <- d_postsamp <- alphaU_postsamp <- alphaR_postsamp <- b_postsamp <- Y_postsamp <- NULL
+  acc_par <- acc_Y <- 0
+  
+  # set current states
+  tau_current <- tau_init
+  d_current <- d_init
+  alphaU_current <- alphaU_init
+  alphaR_current <- alphaR_init
+  b_current <- b_init
+  Y_current <- Y_init
+  
+  for(chain in 1:chains){
+    for(i in 2:n_iter){
+      
+      #GET RID OF LATER
+      #Y_current <- c(data$Y,Yplus - sum(data$Y))
+      
+      # draw new tau from full conditional
+      tau_current <- rgamma(1,n_areas/2+a_tau,0.5*sum(b_current^2)+b_tau)
+      
+      # draw proposal for b 
+      # random walk
+      #  b_proposal <- sapply(b_current, function(x){(rnorm(1,x,prop_sd_b))})
+      
+       b_proposal <- b_current +
+        sapply(1:n_areas,function(A){prop_k_b*grad_log_target_5.1_b(data,Yplus,pop_dat,A,Y_current,alphaU_current,alphaR_current,b_current,d_current,tau_current)}) +
+        sqrt(2*prop_k_b)*rnorm(n_areas)
+      
+      # draw proposal for d
+      #d_proposal <- rlnorm(1,log(d_current),prop_sd_d)
+      logd_proposal <- log(d_current) + prop_k_logd*grad_log_target_5.1_logd(Yplus,pop_dat,alphaU_current,alphaR_current,b_current,d_current,mu_d,sd_d) +
+        sqrt(2*prop_k_logd)*rnorm(1)
+      d_proposal <- exp(logd_proposal)
+      
+      # draw proposal for alphas
+       # alphaU_proposal <- rnorm(1,alphaU_current,prop_sd_alpha)
+       # alphaR_proposal <- rnorm(1,alphaR_current,prop_sd_alpha)
+     alphaU_proposal <- alphaU_current + prop_k_alpha*grad_log_target_5.1_alphaU(data,Yplus,pop_dat,Y_current,alphaU_current,alphaR_current,b_current,d_current,mu_U,sd_U) +
+       sqrt(2*prop_k_alpha)*rnorm(1)
+     alphaR_proposal <- alphaR_current + prop_k_alpha*grad_log_target_5.1_alphaR(data,Yplus,pop_dat,Y_current,alphaU_current,alphaR_current,b_current,d_current,mu_R,sd_R) +
+       sqrt(2*prop_k_alpha)*rnorm(1)
+      
+      Nr_sum_proposal <- sum(pop_dat$N*exp(alphaU_proposal*pop_dat$U+alphaR_proposal*(1-pop_dat$U)+b_proposal[pop_dat$A]))
+      Nr_sum_current <- sum(pop_dat$N*exp(alphaU_current*pop_dat$U+alphaR_current*(1-pop_dat$U)+b_current[pop_dat$A]))
+      # accept or reject proposal for (alpha, b, d)
+      a_prob <- exp({
+        # Y|Y+,alpha,b
+        dmultinom(Y_current,
+                  prob=c(data$N*exp(alphaU_proposal*data$U+alphaR_proposal*(1-data$U)+b_proposal[data$A]),
+                         Nr_sum_proposal-sum(data$N*exp(alphaU_proposal*data$U+alphaR_proposal*(1-data$U)+b_proposal[data$A]))),log=T) - 
+          dmultinom(Y_current,
+                    prob=c(data$N*exp(alphaU_current*data$U+alphaR_current*(1-data$U)+b_current[data$A]),
+                           Nr_sum_current-sum(data$N*exp(alphaU_current*data$U+alphaR_current*(1-data$U)+b_current[data$A]))),log=T) +
+          # Yplus|alpha,b,d
+          dnbinom(Yplus, size=1/d_proposal*Nr_sum_proposal, prob=1/(1+d_proposal),log=T) - 
+          dnbinom(Yplus, size=1/d_current*Nr_sum_current, prob=1/(1+d_current),log=T) +
+          # b|tau
+          sum(sapply(1:n_areas,function(i){
+            dnorm(b_proposal[i],0,sqrt(1/tau_current),log=T) - dnorm(b_current[i],0,sqrt(1/tau_current),log=T)})) +
+          # prior on alphas
+          dnorm(alphaU_proposal,mu_U,sd_U,log=T) - dnorm(alphaU_current,mu_U,sd_U,log=T) +
+          dnorm(alphaR_proposal,mu_R,sd_R,log=T) - dnorm(alphaR_current,mu_R,sd_R,log=T) +
+          # prior on d
+          dlnorm(d_proposal,mu_d,sd_d,log=T) - dlnorm(d_current,mu_d,sd_d,log=T) +
+          # proposal dist for alpha (MALA)
+          dnorm(alphaU_current,alphaU_proposal + prop_k_alpha*grad_log_target_5.1_alphaU(data,Yplus,pop_dat,Y_current,alphaU_proposal,alphaR_current,b_current,d_current,mu_U,sd_U),sqrt(2*prop_k_alpha),log=T) -
+          dnorm(alphaU_proposal,alphaU_current + prop_k_alpha*grad_log_target_5.1_alphaU(data,Yplus,pop_dat,Y_current,alphaU_current,alphaR_current,b_current,d_current,mu_U,sd_U),sqrt(2*prop_k_alpha),log=T) +
+          dnorm(alphaR_current,alphaR_proposal + prop_k_alpha*grad_log_target_5.1_alphaR(data,Yplus,pop_dat,Y_current,alphaU_current,alphaR_proposal,b_current,d_current,mu_R,sd_R),sqrt(2*prop_k_alpha),log=T) -
+          dnorm(alphaR_proposal,alphaR_current + prop_k_alpha*grad_log_target_5.1_alphaR(data,Yplus,pop_dat,Y_current,alphaU_current,alphaR_current,b_current,d_current,mu_R,sd_R),sqrt(2*prop_k_alpha),log=T) +
+          # # MALA proposal dist for b
+          sum(vapply(1:n_areas,function(i){
+            dnorm(b_current[i],b_proposal[i] + prop_k_b*grad_log_target_5.1_b(data,Yplus,pop_dat,i,Y_current,alphaU_current,alphaR_current,b_proposal,d_current,tau_current),sqrt(2*prop_k_b),log=T) -
+              dnorm(b_proposal[i],b_current[i] + prop_k_b*grad_log_target_5.1_b(data,Yplus,pop_dat,i,Y_current,alphaU_current,alphaR_current,b_current,d_current,tau_current),sqrt(2*prop_k_b),log=T)
+          },numeric(1))) +
+          # random walk proposal dist for d
+          # dlnorm(d_current,log(d_proposal),prop_sd_d,log=T) - dlnorm(d_proposal,log(d_current),prop_sd_d,log=T)
+          # MALA proposal dist for d
+          dlnorm(d_current,log(d_proposal) + prop_k_logd*grad_log_target_5.1_logd(Yplus,pop_dat,alphaU_current,alphaR_current,b_current,d_proposal,mu_d,sd_d),sqrt(2*prop_k_logd),log=T) - 
+          dlnorm(d_proposal,log(d_current) + prop_k_logd*grad_log_target_5.1_logd(Yplus,pop_dat,alphaU_current,alphaR_current,b_current,d_current,mu_d,sd_d),sqrt(2*prop_k_logd),log=T)
+        
+      })
+      
+      if(a_prob>runif(1)){
+        d_current <- d_proposal
+        b_current <- b_proposal
+        alphaU_current <- alphaU_proposal
+        alphaR_current <- alphaR_proposal
+        if(i>burnin){acc_par <- acc_par + 1}
+      }
+      
+     
+      ## SAMPLE Ys
+      
+       # record current state
+      tau_postsamp_t[i] <- tau_current
+      d_postsamp_t[i] <- d_current
+      alphaU_postsamp_t[i] <- alphaU_current
+      alphaR_postsamp_t[i] <- alphaR_current
+      b_postsamp_t[i,] <- b_current
+      Y_postsamp_t[i,] <- Y_current
+      
+    } 
+    
+    #get rid of burn-in and add to other chains
+    Y_postsamp <- rbind(Y_postsamp,Y_postsamp_t[(burnin+1):n_iter,])
+    b_postsamp <- rbind(b_postsamp,b_postsamp_t[(burnin+1):n_iter,])
+    alphaU_postsamp <- c(alphaU_postsamp,alphaU_postsamp_t[(burnin+1):n_iter])
+    alphaR_postsamp <- c(alphaR_postsamp,alphaR_postsamp_t[(burnin+1):n_iter])
+    tau_postsamp <- c(tau_postsamp,tau_postsamp_t[(burnin+1):n_iter])
+    d_postsamp <- c(d_postsamp,d_postsamp_t[(burnin+1):n_iter])
+  }
+  
+  eta_postsamp <- cbind(alphaU_postsamp + b_postsamp, alphaR_postsamp + b_postsamp)
+  r_postsamp <- exp(eta_postsamp)
+  acc_par_rate <- acc_par/((n_iter-burnin)*chains)
+  acc_Y_rate <- acc_Y/((n_iter-burnin)*chains)
+  
+  
+  return(list(alphaU = alphaU_postsamp, alphaR = alphaR_postsamp,
+              b=b_postsamp, eta=eta_postsamp, r=r_postsamp, 
+              tau=tau_postsamp, d=d_postsamp, 
+              acc_par_rate = acc_par_rate,
+              acc_Y_rate = acc_Y_rate))
+ 
+}
+
+
+#######################################################################
+#######################################################################
+# Simulations for Alg 5.1-5.3 -----------
+
+## population/parameter settings
+{
+  n_areas <- 20 #numbers of areas
+  n_clusters_urban <- rnegbin(n_areas,250,5) #number of urban clusters in each area
+  n_clusters_rural <- rnegbin(n_areas,250,5) #number of rural clusters in each area
+  n_births_urban <- 100 #average number of births per urban cluster
+  n_births_rural <- 75 #average number of births per rural cluster
+  n_clusters_urban_samp <-  round(0.2*n_clusters_urban) #number of urban clusters sampled
+  n_clusters_rural_samp <-  round(0.1*n_clusters_rural) #number of rural clusters sampled
+  n_births_urban_samp <- 15 # number of births sampled from each urban cluster
+  n_births_rural_samp <- 10 # number of births sampled from each rural cluster
+  
+  # intercept (fixed effect) 
+  alphaU <- rnorm(1,-3.5,0.25)
+  alphaR <- rnorm(1,-3,0.25)
+  
+  # draw hyperparameters
+  tau <- rgamma(1,10,.25)
+  
+  # draw overdispersion parameter
+  d <- rlnorm(1,0,0.25)
+  
+  # draw random effects
+  b <- as.vector(Rfast::rmvnorm(1,rep(0,n_areas),diag(1/tau,n_areas)))
+}
+
+## generate data 
+{
+  all_dat <- data.frame(
+    # (true) number of births in each cluster
+    N = c(rpois(sum(n_clusters_urban),n_births_urban),rpois(sum(n_clusters_rural),n_births_rural)),
+    # urban or rural strata (U=1 if urban, otherwise 0)
+    U = c(rep(1,sum(n_clusters_urban)), rep(0,sum(n_clusters_rural))),
+    # admin area of each cluster
+    A = c(unlist(sapply(1:n_areas,function(i){rep(i,n_clusters_urban[i])})),unlist(sapply(1:n_areas,function(i){rep(i,n_clusters_rural[i])}))))
+  all_dat$cluster <- 1:nrow(all_dat)
+  all_dat$Y <- sapply(1:nrow(all_dat),function(i){rnbinom(1,
+                                                          size = 1/d*all_dat$N[i]*exp(alphaU*all_dat$U[i] + alphaR*(1-all_dat$U[i]) + b[all_dat$A[i]] + rnorm(1,0,0.05)),
+                                                          prob=1/(1+d))})
+  
+  ### sample clusters
+  obs_dat <- NULL
+  for(area in 1:n_areas){
+    # randomly select cluster from urban strata
+    obs_dat <- rbind(obs_dat,all_dat[all_dat$A==area & all_dat$U==1,][sample(1:n_clusters_urban[area],n_clusters_urban_samp[area]),],
+                     # randomly select cluster from rural strata
+                     all_dat[all_dat$A==area & all_dat$U==0,][sample(1:n_clusters_rural[area],n_clusters_rural_samp[area]),])
+  }
+  
+  ## sample births
+  obs_dat$n <- obs_dat$Z <- NA
+  obs_dat[obs_dat$U==1,]$n <- n_births_urban_samp
+  obs_dat[obs_dat$U==0,]$n <- n_births_rural_samp
+  for(i in 1:nrow(obs_dat)){
+    obs_dat$Z[i] <- sum(sample(c(rep(1,obs_dat$Y[i]),rep(0,(obs_dat$N[i]-obs_dat$Y[i]))), obs_dat$n[i]))
+  }
+  
+  
+  data_list <- list(obs_dat = obs_dat, #observed data
+                    Yplus = sum(all_dat$Y), #ALL deaths
+                    pop_strata_dat = all_dat %>% group_by(A,U) %>% summarise(N=sum(N))) # number of births per strata (area x urban)
+}
+
+## run model
+
+#define initial states
+alphaU_init <- alphaR_init <- -3
+tau_init <- 25
+d_init <- 0.1
+b_init <- rnorm(n_areas,0,1/sqrt(tau_init))
+Nr_obs_init <- obs_dat$N*exp(obs_dat$U*alphaU_init + (1- obs_dat$U)*alphaR_init + b_init[ obs_dat$A])
+Nr_init <- pop_dat$N*exp(pop_dat$U*alphaU_init + (1-pop_dat$U)*alphaR_init + b_init[pop_dat$A])
+Y_init <- t(rmultinom(1,Yplus, c(Nr_obs_init,sum(Nr_init)-sum(Nr_obs_init))))
+
+## always run for 1000 iterations first to properly tune ks (different for every dataset)
+postsamp_5.1 <- postsamp_Alg5.1_MCMC(tau_init, d_init, alphaU_init, alphaR_init, b_init, Y_init,
+                                    # prop_sd_alpha = 0.1, 
+                                     #prop_sd_b = 0.05,
+                                     prop_k_alpha = 2e-5, 
+                                     prop_k_b = 1e-4,
+                                     prop_k_logd = 0.05,
+                                     data_list = data_list, n_iter=1000)
 
 #######################################################################
 #######################################################################

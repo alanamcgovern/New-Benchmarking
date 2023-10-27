@@ -1,20 +1,21 @@
 library(INLA)
 library(SUMMER)
 library(tidyverse)
+library(ggpubr)
 
 # load data ------
-#data
-load("/Users/alanamcgovern/Desktop/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/Malawi_cluster_dat.rda")
-dat <- mod.dat[mod.dat$age==0 & mod.dat$survey==2015 & mod.dat$years==2010,]
-dat$years <- 2010
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/Malawi_cluster_dat.rda")
+dat <- mod.dat[mod.dat$age==0,]
 dat$died <- dat$Y
+dat$years.int <- as.integer(dat$years)
 dat$years <- as.numeric(as.character(dat$years))
+
 dat$v005 <- dat$v005/1e6
 admin_key <- dat %>% dplyr::select(admin1.char,admin2.char) %>% unique()
 admin_key_num <- dat %>% dplyr::select(admin1,admin2) %>% unique()
 
 #adjacency matrix
-load("/Users/alanamcgovern/Desktop/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/shapeFiles_gadm/Malawi_Amat.rda")
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/shapeFiles_gadm/Malawi_Amat.rda")
 # make separate islands for each admin1 area
 admin2.mat.nested <- matrix(0,nrow(admin2.mat),nrow(admin2.mat))
 for(area in 1:nrow(admin1.mat)){
@@ -28,145 +29,169 @@ for(area in 1:nrow(admin1.mat)){
 }
 
 # get weights for aggregating from admin2 to admin 1
-load("/Users/alanamcgovern/Desktop/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/worldpop/adm1_weights_u1.rda")
-adm1_weights <- (weight.adm1.u1 %>% filter(years==2010))[,1:2] #not that different across period of years
-load("/Users/alanamcgovern/Desktop/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/worldpop/adm2_weights_u1.rda")
-adm2_weights <- (weight.adm2.u1 %>% filter(years==2010))[,1:2] #not that different across period of years
-adm2_weights <- merge(adm2_weights,admin_key,by.x='region',by.y='admin2.char')
-adm1_props <- adm2_weights %>% group_by(admin1.char) %>% summarise(adm1_prop = sum(proportion))
-adm2_to_adm1_weights <- left_join(adm2_weights,adm1_props,by='admin1.char')
-adm2_to_adm1_weights$adm2_prop <- adm2_to_adm1_weights$proportion/adm2_to_adm1_weights$adm1_prop
-adm2_to_adm1_weights <- adm2_to_adm1_weights[,c(1,3,5)]
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/worldpop/adm1_weights_u1.rda")
+adm1_weights <- weight.adm1.u1
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/worldpop/adm2_weights_u1.rda")
+#proportion of admin2 relative to national
+adm2_weights <- merge(weight.adm2.u1,admin_key,by.x='region',by.y='admin2.char')
+#add to get proportion of admin1 relative to national and merge
+adm1_props <- adm2_weights %>% group_by(admin1.char,years) %>% summarise(adm1_prop = sum(proportion))
+adm2_to_adm1_weights_t <- left_join(adm2_weights,adm1_props,by=c('admin1.char','years'))
+# get proportion of admin2 relative to admin 1
+adm2_to_adm1_weights <- adm2_to_adm1_weights_t %>% group_by(admin1.char,years) %>% mutate(adm2_to_adm1_prop = proportion/adm1_prop)
+adm2_to_adm1_weights <- adm2_to_adm1_weights[,c(1,3,4,6)]
+colnames(adm2_to_adm1_weights)[4] <- 'proportion'
 
 # get urban/rural weights for admin1 and admin2
-adm1_UR_weights <- readRDS("/Users/alanamcgovern/Desktop/UN_Estimates/UN-Subnational-Estimates/Results/Malawi/UR/U1_fraction/admin1_u1_urban_weights.rds")
-adm1_UR_weights <- (adm1_UR_weights %>% filter(years==2010))[,c(1,3:4)] #not that different across period of years
+adm1_UR_weights <- readRDS("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Malawi/UR/U1_fraction/admin1_u1_urban_weights.rds")
 adm1_UR_weights <- gather(adm1_UR_weights,strata,proportion,urban:rural)
-adm2_UR_weights <- readRDS("/Users/alanamcgovern/Desktop/UN_Estimates/UN-Subnational-Estimates/Results/Malawi/UR/U1_fraction/admin2_u1_urban_weights.rds")
-adm2_UR_weights <- (adm2_UR_weights %>% filter(years==2010))[,c(1,3:4)] #not that different across period of years
+adm2_UR_weights <- readRDS("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Malawi/UR/U1_fraction/admin2_u1_urban_weights.rds")
 adm2_UR_weights <- gather(adm2_UR_weights,strata,proportion,urban:rural)
 
 # fit models -----
+plot_list <- list()
+for(survey_t in c(2010,2014,2015,2020)){
+  #data
+  dat_t <- dat[dat$survey==survey_t,]
 
-# admin 1 level models ---------
-#direct estimates and smoothed
-adm1_dir_est <- getDirect(births = dat, years = unique(dat$years), regionVar = 'admin1.char',
-                          timeVar = 'years', clusterVar = '~cluster', Ntrials = 'total')
+  # admin 1 level models ---------
+  #direct estimates and smoothed ------
+# adm1_dir_est <- getDirect(births = dat_t, years = unique(dat_t$years), regionVar = 'admin1.char',
+#                           timeVar = 'years', clusterVar = '~cluster', Ntrials = 'total')
+# 
+# natl_dir_est <- adm1_dir_est[adm1_dir_est$region=='All',]
+# adm1_dir_est <- adm1_dir_est[adm1_dir_est$region!='All',]
+# 
+# adm1_sd_fit <- smoothDirect(adm1_dir_est, Amat = admin1.mat, time.model = 'rw2',
+#                             year_label = as.character(2000:2015), type.st = 1,
+#                             year_range = 2000:2015, is.yearly = F)
+# 
+# adm1_sd_est <- getSmoothed(adm1_sd_fit, Amat = admin1.mat, CI=0.95,
+#                            year_label = as.character(2000:2015),
+#                            year_range = 2000:2015, control.compute=list(cpo=T))
+# 
+# adm1_sd_est$mean <- (adm1_sd_est$upper - adm1_sd_est$lower)/2 + adm1_sd_est$lower
 
-natl_dir_est <- adm1_dir_est[adm1_dir_est$region=='All',]
-adm1_dir_est <- adm1_dir_est[adm1_dir_est$region!='All',]
-
-adm1_sd_fit <- smoothDirect(adm1_dir_est, Amat = admin1.mat, time.model = NULL)
-
-adm1_dir_est <- adm1_dir_est %>% rename(logit.var.est = var.est)
-adm1_dir_est$var.est <- (adm1_dir_est$upper-adm1_dir_est$lower)/(2*1.96)
-adm1_sd_est <- getSmoothed(adm1_sd_fit, Amat = Q_admin1, CI=0.95, control.compute=list(cpo=T))
-adm1_sd_est$mean <- (adm1_sd_est$upper - adm1_sd_est$lower)/2 + adm1_sd_est$lower
-adm1_sd_est <- data.frame(model='SD',region = adm1_sd_est$region, 
-                          mean = adm1_sd_est$mean, lower95 = adm1_sd_est$lower, upper95 = adm1_sd_est$upper)
-
-#mod1: just admin1 (fixed effect) -- may not have enough data if only 1 year of data is included/many admin1 areas
-inla_adm1fe <- INLA::inla(Y ~ urban + factor(admin1) -1,
-                          data=dat, family='nbinomial', E=total,
-                          control.predictor = list(link = 1),
-                          control.compute = list(cpo=T))
-mod1_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,urban) %>% unique()),unique(inla_adm1fe$summary.fitted.values)[,c(1,3,5)])
-mod1_summary$model <- 'mod1'
-
-#mod2: just admin1 (random effect)
-hyper.inla <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
+  # INLA hyperpriors ------
+hyper.rw2 <-  list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+hyper.ar1 = list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
+                 theta2 = list(prior = "pc.cor1",param = c(0.7, 0.9)))
+hyper.bym2 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
                    phi = list(prior = "pc",  param = c(0.5, 2/3)))
 
-inla_adm1re <- INLA::inla(Y ~ urban -1 + f(admin1, graph = admin1.mat, 
-                                           model = "bym2",hyper=hyper.inla, 
-                                           scale.model = T, adjust.for.con.comp = T), 
-                        data=dat, family='nbinomial', E=total,
+  #mod1: just admin1 (fixed effect) -- may not have enough data if only 1 year of data is included/many admin1 areas -----
+  mod1 <- INLA::inla(Y ~ urban + factor(admin1) +
+                            f(years.int, model='rw2', hyper = hyper.rw2, scale.model = T,
+                              constr = T, extraconstr = NULL, values = 1:max(years.int)) -1,
+                        data=dat_t, family='nbinomial', E=total,
                         control.predictor = list(link = 1),
                         control.compute = list(cpo=T))
-mod2_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,urban) %>% unique()),unique(inla_adm1re$summary.fitted.values)[,c(1,3,5)])
-mod2_summary$model <- 'mod2'
 
-inla_adm1_ests <- rbind(mod1_summary,mod2_summary)
-inla_adm1_ests <- mod2_summary
-inla_adm1_ests <- merge(adm1_UR_weights,inla_adm1_ests,by.x=c('region','strata'),by.y=c('admin1.char','urban'))
-inla_adm1_ests <- inla_adm1_ests %>% group_by(model,region) %>% summarise(mean =(sum(mean*proportion)), 
-                                                                          lower95=(sum(`0.025quant`*proportion)),
-                                                                          upper95 = (sum(`0.975quant`*proportion)))
+  mod1_adm1_fe <- rbind(rep(0,3),mod1$summary.fixed[3:nrow(mod1$summary.fixed),c(1,3,5)])
+  mod1_strata_fe <- mod1$summary.fixed[1:2,c(1,3,5)]
+  mod1_time_re <- mod1$summary.random$years.int[,c(1,2,4,6)]
 
-# admin 2 level models ---------
-# mod3a: both admin1 (fixed effect) and admin2 
-# inla_bothfe <- INLA::inla(Y ~ urban + factor(admin1) -1 +
-#                             f(admin2, graph = abs(admin2.mat),model = "bym2",hyper=hyper.inla, 
-#                               scale.model = T, adjust.for.con.comp = T),
-#                           data=dat, family='nbinomial', E=total,
-#                           control.predictor = list(compute = FALSE, link = 1),
-#                           control.compute = list(cpo=T))
-# mod3a_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,admin2.char,urban) %>% unique()),unique(inla_bothfe$summary.fitted.values)[,c(1,3,5)])
-# mod3a_summary$model <- 'mod3a'
+  mod1_summary <- expand.grid(admin1.char = unique(dat_t$admin1.char),years = unique(dat_t$years),strata = unique(dat_t$urban))
+  mod1_summary <- mod1_summary %>% mutate(years.int = years - min(mod1_summary$years) +1,
+                                        strata.num = as.numeric(strata),
+                                        admin1 = as.numeric(str_remove(admin1.char,'admin1_')),
+                                        model = 'Adm1 FE')
+  mod1_summary$logit.mean <- mod1_adm1_fe$mean[mod1_summary$admin1] + mod1_strata_fe$mean[mod1_summary$strata.num] + mod1_time_re$mean[mod1_summary$years.int]
+  mod1_summary$mean <- expit(mod1_summary$logit.mean)
+  mod1_summary  <- mod1_summary %>% select(model, admin1.char, years,strata, mean) %>% rename(region=admin1.char)
 
-# mod3: both admin1 (fixed effect) and admin2 (nested)
-inla_bothfe <- INLA::inla(Y ~ urban + factor(admin1) -1 +
-                            f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.inla, 
-                              scale.model = T, adjust.for.con.comp = T),
-                          data=dat, family='nbinomial', E=total,
+  # organize admin1 results ------
+
+# adm1_dir_est <- data.frame(model='Direct',region = adm1_dir_est$region, years = adm1_dir_est$years,
+#                            mean = adm1_dir_est$mean)
+# adm1_sd_est <- data.frame(model='SD',region = adm1_sd_est$region, years = adm1_sd_est$years.num,
+#                           mean = adm1_sd_est$mean)
+
+  inla_adm1_ests <- mod1_summary
+  inla_adm1_ests <- merge(adm1_UR_weights,inla_adm1_ests,by=c('region','strata','years'))
+  inla_adm1_ests <- inla_adm1_ests %>% group_by(model,region,years) %>% summarise(mean =(sum(mean*proportion))) 
+                                                                          
+
+  # mod3: both admin1 (fixed effect) and admin2 (nested) -----
+  mod3<- INLA::inla(Y ~ urban + factor(admin1) -1 +
+                            f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.bym2, 
+                              constr=T, scale.model = T, adjust.for.con.comp = T) + #this combination forces sum-to-zero constraints on islands
+                            f(years.int, model='rw2', hyper = hyper.rw2, scale.model = T,
+                              constr = T, extraconstr = NULL, values = 1:max(years.int)),
+                          data=dat_t, family='nbinomial', E=total,
                           control.predictor = list(compute = F, link = 1),
                           control.compute = list(cpo=T))
-mod3_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,admin2.char,urban) %>% unique()),unique(inla_bothfe$summary.fitted.values)[,c(1,3,5)])
-mod3_summary$model <- 'mod3'
 
-# # mod4a: both admin1 (random effect) and admin2
-# inla_bothre <- INLA::inla(Y ~ urban + -1 +
-#                             f(admin1, graph = abs(admin1.mat),model = "bym2",hyper=hyper.inla, scale.model = T, adjust.for.con.comp = T) +
-#                             f(admin2, graph = abs(admin2.mat),model = "bym2",hyper=hyper.inla, scale.model = T, adjust.for.con.comp = T),
-#                           data=dat, family='nbinomial', E=total,
-#                           control.predictor = list(compute = FALSE, link = 1))
-# mod4a_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,admin2.char,urban) %>% unique()),unique(inla_bothre$summary.fitted.values)[,c(1,3,5)])
-# mod4a_summary$model <- 'mod4a'
+  mod3_adm1_fe <- rbind(rep(0,3),mod3$summary.fixed[3:nrow(mod3$summary.fixed),c(1,3,5)])
+  mod3_strata_fe <- mod3$summary.fixed[1:2,c(1,3,5)]
+  mod3_adm2_re <- mod3$summary.random$admin2[,c(1,2,4,6)]
+  mod3_time_re <- mod3$summary.random$years.int[,c(1,2,4,6)]
 
-# mod4: both admin1 (random effect) and admin2 (nested)
-inla_bothre <- INLA::inla(Y ~ urban + -1 +
-                            f(admin1, graph = (admin1.mat),model = "bym2",hyper=hyper.inla, scale.model = T, adjust.for.con.comp = T) +
-                            f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.inla, scale.model = T, adjust.for.con.comp = T),
-                          data=dat, family='nbinomial', E=total,
-                          control.predictor = list(compute = FALSE, link = 1),
-                          control.compute = list(cpo=T))
-mod4_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,admin2.char,urban) %>% unique()),unique(inla_bothre$summary.fitted.values)[,c(1,3,5)])
-mod4_summary$model <- 'mod4'
+  mod3_summary <- expand.grid(admin2.char = unique(dat_t$admin2.char),years = unique(dat_t$years),strata = unique(dat_t$urban))
+  mod3_summary <- merge(mod3_summary,admin_key,by='admin2.char')
+  mod3_summary <- mod3_summary %>% mutate(years.int = years - min(mod1_summary$years) +1,
+                                        strata.num = as.numeric(strata),
+                                        admin1 = as.numeric(str_remove(admin1.char,'admin1_')),
+                                        admin2 = as.numeric(str_remove(admin2.char,'admin2_')),
+                                        model = 'Adm1 FE + Adm2')
 
-# mod5a: just admin 2 
-# inla_adm2re <- INLA::inla(Y ~ urban - 1 + f(admin2, graph = abs(admin2.mat),model = "bym2",hyper=hyper.inla, scale.model = T, adjust.for.con.comp = T),
-#                           data=dat, family='nbinomial', E=total,
-#                           control.predictor = list(compute = FALSE, link = 1))
-# mod5a_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,admin2.char,urban) %>% unique()),unique(inla_adm2re$summary.fitted.values)[,c(1,3,5)])
-# mod5a_summary$model <- 'mod5a'
+  mod3_summary$logit.mean <- mod3_adm1_fe$mean[mod3_summary$admin1] + mod3_adm2_re$mean[mod3_summary$admin2] + mod3_strata_fe$mean[mod3_summary$strata.num] + mod3_time_re$mean[mod3_summary$years.int]
+  mod3_summary$mean <- expit(mod3_summary$logit.mean)
+  mod3_summary  <- mod3_summary %>% select(model, admin2.char, admin1.char, years,strata, mean) %>% rename(region=admin2.char)
+  
+  # mod4: just admin2 -----
+  mod4<- INLA::inla(Y ~ urban -1 +
+                      f(admin2, graph = (admin2.mat),model = "bym2",hyper=hyper.bym2, 
+                        constr=T, scale.model = T, adjust.for.con.comp = T) + 
+                      f(years.int, model='rw2', hyper = hyper.rw2, scale.model = T,
+                        constr = T, extraconstr = NULL, values = 1:max(years.int)),
+                    data=dat_t, family='nbinomial', E=total,
+                    control.predictor = list(compute = F, link = 1),
+                    control.compute = list(cpo=T))
+  
+  mod4_strata_fe <- mod4$summary.fixed[1:2,c(1,3,5)]
+  mod4_adm2_re <- mod4$summary.random$admin2[,c(1,2,4,6)]
+  mod4_time_re <- mod4$summary.random$years.int[,c(1,2,4,6)]
+  
+  mod4_summary <- expand.grid(admin2.char = unique(dat_t$admin2.char),years = unique(dat_t$years),strata = unique(dat_t$urban))
+  mod4_summary <- mod4_summary %>% mutate(years.int = years - min(mod1_summary$years) +1,
+                                          strata.num = as.numeric(strata),
+                                          admin2 = as.numeric(str_remove(admin2.char,'admin2_')),
+                                          model = 'Adm2')
+  
+  mod4_summary$logit.mean <- mod4_adm2_re$mean[mod4_summary$admin2] + mod4_strata_fe$mean[mod4_summary$strata.num] + mod4_time_re$mean[mod4_summary$years.int]
+  mod4_summary$mean <- expit(mod4_summary$logit.mean)
+  mod4_summary <- merge(mod4_summary,admin_key,by='admin2.char')
+  
+  mod4_summary  <- mod4_summary %>% select(model, admin2.char, admin1.char, years,strata, mean) %>% rename(region=admin2.char)
 
-# mod5: just admin 2 (nested)
-inla_adm2re <- INLA::inla(Y ~ urban - 1 + f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.inla, scale.model = T, adjust.for.con.comp = T),
-                          data=dat, family='nbinomial', E=total,
-                          control.predictor = list(compute = FALSE, link = 1),
-                          control.compute = list(cpo=T))
-mod5_summary <- cbind(data.frame(dat %>% dplyr::select(admin1.char,admin2.char,urban) %>% unique()),unique(inla_adm2re$summary.fitted.values)[,c(1,3,5)])
-mod5_summary$model <- 'mod5'
+  # organize admin 2 results ----
 
-inla_adm2_ests <- rbind(mod3_summary,mod4_summary,mod5_summary)
-#merge from U/R to admin2
-inla_adm2_ests <- merge(adm2_UR_weights,inla_adm2_ests,by.x=c('region','strata'),by.y=c('admin2.char','urban'))
-inla_adm2_ests <- inla_adm2_ests %>% group_by(model,region) %>% summarise(mean = (sum(mean*proportion)), 
-                                                                          lower95=(sum(`0.025quant`*proportion)),
-                                                                          upper95 = (sum(`0.975quant`*proportion)))
-#merge from admin2 to admin1
-inla_adm2_ests <- merge(adm2_to_adm1_weights,inla_adm2_ests,by='region')
-inla_adm2_to_adm1_ests <- inla_adm2_ests %>% group_by(model,admin1.char) %>% summarise(mean = (sum(mean*adm2_prop)), 
-                                                                                       lower95=(sum(lower95*adm2_prop)),
-                                                                                       upper95 = (sum(upper95*adm2_prop))) %>% rename(region=admin1.char)
+  inla_adm2_ests <- rbind(mod3_summary,mod4_summary)
+  #merge from U/R to admin2
+  inla_adm2_ests <- merge(adm2_UR_weights,inla_adm2_ests,by=c('region','strata','years'))
+  inla_adm2_ests <- inla_adm2_ests %>% group_by(model,admin1.char,region,years) %>% summarise(mean = (sum(mean*proportion)))
+  #merge from admin2 to admin1
+  inla_adm2_ests <- merge(adm2_to_adm1_weights,inla_adm2_ests,by=c('region','admin1.char','years'))
+  inla_adm2_to_adm1_ests <- inla_adm2_ests %>% group_by(model,admin1.char,years) %>% summarise(mean = (sum(mean*proportion))) %>% rename(region=admin1.char)
 
-# combine results for admin ------
-adm1_ests_inla_all <- rbind(adm1_sd_est,inla_adm1_ests,inla_adm2_to_adm1_ests)
+  # combine results for admin ------
+  adm1_ests_inla_all <- rbind(#adm1_dir_est,
+                            #adm1_sd_est,
+                            inla_adm1_ests,inla_adm2_to_adm1_ests)
+  
+  plot_list[[which(survey_t==c(2010,2014,2015,2020))]] <- adm1_ests_inla_all %>% ggplot() + geom_line(aes(x=years,y=mean,color=region,lty=model)) +ggtitle(paste0('Malawi, ',survey_t,' Survey'))
+}
+
+pdf("/Users/alanamcgovern/Desktop/Research/New Benchmarking/Nested Model Approach/Malawi Agg Admin1 Estimates.pdf")
+  ggarrange(plotlist = plot_list, common.legend = T)
+dev.off()
 
 # aggregate to national ------
-adm1_ests <- merge(adm1_ests_inla_all,adm1_weights,by='region')
-natl_ests <- cbind(adm1_ests %>% group_by(model) %>% summarise(mean=sum(mean*proportion),lower95=sum(lower95*proportion), upper95=sum(upper95*proportion)))
+adm1_ests <- merge(adm1_ests_inla_all,weight.adm1.u1,by=c('region','years'))
+natl_ests <- cbind(adm1_ests %>% group_by(model,years) %>% summarise(mean=sum(mean*proportion),lower95=sum(lower95*proportion), upper95=sum(upper95*proportion)))
 
+natl_ests %>% ggplot() + geom_line(aes(x=years,y=mean,lty=model))
 # compare CV diagnostics --------
 ## first check that they are reliable
 sum(inla_adm1fe$cpo$failure + inla_adm1re$cpo$failure + 
