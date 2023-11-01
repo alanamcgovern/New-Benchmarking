@@ -2243,8 +2243,10 @@ dev.off()
 ## Because we are using 1 stage cluster sampling, we are assuming the only households in a sampled cluster are the ones we observed
 # and each unsampled cluster has same number of households that were observed in sampled clusters
 
+#load in data
+{
 load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Sierra_Leone/Sierra_Leone_cluster_dat.rda")
-admin2_key <- mod.dat %>% select(admin2,admin2.char,admin2.name) %>% unique()
+admin2_key <- mod.dat %>% dplyr::select(admin2,admin2.char,admin2.name) %>% unique()
 
 obs_dat <- mod.dat %>% filter(age==0,years==2010,survey==2019) %>% group_by(cluster) %>% 
   reframe(N=sum(total),
@@ -2278,7 +2280,7 @@ pop_dat$nclusters <- c(708, 325,464,266,
                        65, 635, 2139)
 # from DHS report -- choose 24 from each cluster
 pop_dat$N <- round(pop_dat$nclusters*24*pop_dat$bHHratio)
-pop_dat <- pop_dat %>% select(A,admin2.name,U,N)
+pop_dat <- pop_dat %>% dplyr::select(A,admin2.name,U,N)
 
 igme.nmr <- read_csv("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/IGME/igme2022_nmr.csv")
 igme.est <- (igme.nmr %>% filter(iso=='SLE',Quantile=='Median'))$`2010.5`/1000
@@ -2287,6 +2289,7 @@ Yplus_est <- round(igme.est*sum(pop_dat$N))
 data_list <- list(obs_dat = obs_dat, #observed data
        Yplus = Yplus_est, #ALL deaths
        pop_strata_dat = pop_dat) # number of births per strata (area x urban)
+}
 
 postsamp_4.1 <- postsamp_Alg4.1_MCMC(tau_init = 25, d_init = 0.1, alphaU_init = -4, alphaR_init = -3,
                                      #prop_sd_alpha = 0.05, 
@@ -2296,21 +2299,67 @@ postsamp_4.1 <- postsamp_Alg4.1_MCMC(tau_init = 25, d_init = 0.1, alphaU_init = 
                                      prop_k_logd = 0.05,
                                      data_list = data_list, n_iter=50000)
 
+pdf("/Users/alanamcgovern/Desktop/Research/New Benchmarking/Handcoded MCMC Simulations/Alg 4.1 231031, SLE 2010, 50k iterations posterior distributions.pdf") 
+{
+  hist(log(postsamp_4.1$tau))
+  hist(log(postsamp_4.1$d))
+  
+  hist(postsamp_4.1$alphaU)
+  hist(postsamp_4.1$alphaR)
+  
+  results4.1_b <- gather(data.frame(postsamp_4.1$b),'area','b')
+  results4.1_b$area <- as.numeric(str_remove(results4.1_b$area,'X'))
+  g <- results4.1_b %>% ggplot() + geom_boxplot(aes(y=b)) +
+    facet_grid(~area) + ggtitle('Approx 100 births per area') +
+    geom_hline(yintercept=0,col='grey50')
+  print(g)
+  
+  plot(log(postsamp_4.1$tau[1:50000%%50==0]),type='l')
+  plot(log(postsamp_4.1$d[1:50000%%50==0]),type='l')
+  plot(postsamp_4.1$alphaU[1:50000%%50==0],type='l')
+  plot(postsamp_4.1$alphaR[1:50000%%50==0],type='l')
+  plot(postsamp_4.1$b[1:50000%%50==0,2],type='l')
+  plot(postsamp_4.1$b[1:50000%%50==0,7],type='l')
+  plot(postsamp_4.1$b[1:50000%%50==0,15],type='l')
+
+} 
+dev.off()  
+
+
+#compare to similar INLA models
+{
 alg4.1.res <- expand_grid(admin2=1:nrow(admin2_key),U=c(0,1))
 alg4.1.res$eta <- median(postsamp_4.1$alphaU)*alg4.1.res$U + median(postsamp_4.1$alphaR)*(1-alg4.1.res$U) + Rfast::colMedians(postsamp_4.1$b)[alg4.1.res$admin2]
-alg4.1.res$rate <- exp(alg4.1.res$eta)
+alg4.1.res$model <- 'Alg 4.1'
 
-#compare to BB8 model
-# are in the same ballpark, but not really similar -- hard to say anything because we are not assuming correct sampling frame
-load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Sierra_Leone/Betabinomial/NMR/Sierra_Leone_res_adm2_strat_nmr_bench.rda")
-bb8.res <- bb.res.adm2.strat.nmr.bench$stratified %>% filter(years.num==2010) %>% rename(admin2=area) %>%
-  mutate(U=as.numeric(I(strata=='urban'))) %>%select(admin2,U,median)
+mod.dat.inla <- mod.dat %>% filter(age==0,years==2010,survey==2019)
 
-alg4.1.res <- full_join(alg4.1.res,bb8.res, by = join_by(admin2, U))
-alg4.1.res %>% ggplot() + geom_point(aes(x=admin2,y=rate,group=factor(U),col=factor(U)),pch=2) + 
-  geom_point(aes(x=admin2,y=median,group=factor(U),col=factor(U)))
+hyperpc1 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+inla.fit1 <- INLA::inla(Y ~ urban -1 +
+                         f(admin2, model = "iid",hyper=hyperpc1),
+                       data=mod.dat.inla, family='nbinomial', E=total,
+                       control.predictor = list(compute = F, link = 1))
+inla.res1 <- expand_grid(admin2=1:nrow(admin2_key),U=c(0,1))
+inla.res1$eta <- inla.fit1$summary.fixed[1,1]*inla.res1$U + inla.fit1$summary.fixed[2,1]*(1-inla.res1$U) + inla.fit1$summary.random$admin2[inla.res1$admin2,2]
+inla.res1$model <- 'IID Adm2'
 
-load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Sierra_Leone/Direct/NMR/Sierra_Leone_direct_adm2_nmr.rda")
+inla.fit2 <- INLA::inla(Y ~ urban + factor(admin1) -1 +
+                          f(admin2, model = "iid",hyper=hyperpc1),
+                        data=mod.dat.inla, family='nbinomial', E=total,
+                        control.predictor = list(compute = F, link = 1))
+inla.res2 <- expand_grid(admin2=1:nrow(admin2_key),U=c(0,1))
+inla.res2$eta <- inla.fit2$summary.fixed[1,1]*inla.res2$U + inla.fit2$summary.fixed[2,1]*(1-inla.res2$U) + inla.fit2$summary.random$admin2[inla.res2$admin2,2]
+inla.res2$model <- 'FE Adm1 + IID Adm2'
+
+all.res <- rbind(alg4.1.res,inla.res1,inla.res2)
+
+pdf("/Users/alanamcgovern/Desktop/Research/New Benchmarking/Handcoded MCMC Simulations/Compare Alg 4.1 to INLA 231031, SLE 2010.pdf") 
+
+all.res %>% ggplot(aes(factor(U),exp(eta),color=model)) + geom_point() + facet_grid(~admin2) + 
+  ggtitle('Comparing results from Alg 4.1 MCMC to NB INLA models with urban intercept and \n various spatial effects using Sierra Leone 2010 data from 2019 survey')
+
+dev.off()
+}
 
 #######################################################################
 #######################################################################

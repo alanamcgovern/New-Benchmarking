@@ -56,21 +56,21 @@ for(survey_t in c(2010,2014,2015,2020)){
 
   # admin 1 level models ---------
   #direct estimates and smoothed ------
-# adm1_dir_est <- getDirect(births = dat_t, years = unique(dat_t$years), regionVar = 'admin1.char',
-#                           timeVar = 'years', clusterVar = '~cluster', Ntrials = 'total')
-# 
-# natl_dir_est <- adm1_dir_est[adm1_dir_est$region=='All',]
-# adm1_dir_est <- adm1_dir_est[adm1_dir_est$region!='All',]
-# 
-# adm1_sd_fit <- smoothDirect(adm1_dir_est, Amat = admin1.mat, time.model = 'rw2',
-#                             year_label = as.character(2000:2015), type.st = 1,
-#                             year_range = 2000:2015, is.yearly = F)
-# 
-# adm1_sd_est <- getSmoothed(adm1_sd_fit, Amat = admin1.mat, CI=0.95,
-#                            year_label = as.character(2000:2015),
-#                            year_range = 2000:2015, control.compute=list(cpo=T))
-# 
-# adm1_sd_est$mean <- (adm1_sd_est$upper - adm1_sd_est$lower)/2 + adm1_sd_est$lower
+adm1_dir_est <- getDirect(births = dat_t, years = unique(dat_t$years), regionVar = 'admin1.char',
+                          timeVar = 'years', clusterVar = '~cluster', Ntrials = 'total')
+
+natl_dir_est <- adm1_dir_est[adm1_dir_est$region=='All',]
+adm1_dir_est <- adm1_dir_est[adm1_dir_est$region!='All',]
+
+adm1_sd_fit <- smoothDirect(adm1_dir_est, Amat = admin1.mat, time.model = 'rw2',
+                            year_label = as.character(2000:2015), type.st = 1,
+                            year_range = 2000:2015, is.yearly = F)
+
+adm1_sd_est <- getSmoothed(adm1_sd_fit, Amat = admin1.mat, CI=0.95,
+                           year_label = as.character(2000:2015),
+                           year_range = 2000:2015, control.compute=list(cpo=T))
+
+adm1_sd_est$mean <- (adm1_sd_est$upper - adm1_sd_est$lower)/2 + adm1_sd_est$lower
 
   # INLA hyperpriors ------
 hyper.rw2 <-  list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
@@ -102,10 +102,10 @@ hyper.bym2 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)),
 
   # organize admin1 results ------
 
-# adm1_dir_est <- data.frame(model='Direct',region = adm1_dir_est$region, years = adm1_dir_est$years,
-#                            mean = adm1_dir_est$mean)
-# adm1_sd_est <- data.frame(model='SD',region = adm1_sd_est$region, years = adm1_sd_est$years.num,
-#                           mean = adm1_sd_est$mean)
+ adm1_dir_est <- data.frame(model='Direct',region = adm1_dir_est$region, years = adm1_dir_est$years,
+                            mean = adm1_dir_est$mean)
+ adm1_sd_est <- data.frame(model='SD',region = adm1_sd_est$region, years = adm1_sd_est$years.num,
+                           mean = adm1_sd_est$mean)
 
   inla_adm1_ests <- mod1_summary
   inla_adm1_ests <- merge(adm1_UR_weights,inla_adm1_ests,by=c('region','strata','years'))
@@ -176,8 +176,8 @@ hyper.bym2 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)),
   inla_adm2_to_adm1_ests <- inla_adm2_ests %>% group_by(model,admin1.char,years) %>% summarise(mean = (sum(mean*proportion))) %>% rename(region=admin1.char)
 
   # combine results for admin ------
-  adm1_ests_inla_all <- rbind(#adm1_dir_est,
-                            #adm1_sd_est,
+  adm1_ests_inla_all <- rbind(adm1_dir_est,
+                            adm1_sd_est,
                             inla_adm1_ests,inla_adm2_to_adm1_ests)
   
   plot_list[[which(survey_t==c(2010,2014,2015,2020))]] <- adm1_ests_inla_all %>% ggplot() + geom_line(aes(x=years,y=mean,color=region,lty=model)) +ggtitle(paste0('Malawi, ',survey_t,' Survey'))
