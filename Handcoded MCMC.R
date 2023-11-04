@@ -2338,7 +2338,8 @@ hyperpc1 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
 inla.fit1 <- INLA::inla(Y ~ urban -1 +
                          f(admin2, model = "iid",hyper=hyperpc1),
                        data=mod.dat.inla, family='nbinomial', E=total,
-                       control.predictor = list(compute = F, link = 1))
+                       control.predictor = list(compute = F, link = 1),
+                       control.family = list(link='log'))
 inla.res1 <- expand_grid(admin2=1:nrow(admin2_key),U=c(0,1))
 inla.res1$eta <- inla.fit1$summary.fixed[1,1]*inla.res1$U + inla.fit1$summary.fixed[2,1]*(1-inla.res1$U) + inla.fit1$summary.random$admin2[inla.res1$admin2,2]
 inla.res1$model <- 'IID Adm2'
@@ -2346,7 +2347,8 @@ inla.res1$model <- 'IID Adm2'
 inla.fit2 <- INLA::inla(Y ~ urban + factor(admin1) -1 +
                           f(admin2, model = "iid",hyper=hyperpc1),
                         data=mod.dat.inla, family='nbinomial', E=total,
-                        control.predictor = list(compute = F, link = 1))
+                        control.predictor = list(compute = F, link = 1),
+                        control.family = list(link='log'))
 inla.res2 <- expand_grid(admin2=1:nrow(admin2_key),U=c(0,1))
 inla.res2$eta <- inla.fit2$summary.fixed[1,1]*inla.res2$U + inla.fit2$summary.fixed[2,1]*(1-inla.res2$U) + inla.fit2$summary.random$admin2[inla.res2$admin2,2]
 inla.res2$model <- 'FE Adm1 + IID Adm2'

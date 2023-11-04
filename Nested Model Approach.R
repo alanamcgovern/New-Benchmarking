@@ -2,6 +2,7 @@ library(INLA)
 library(SUMMER)
 library(tidyverse)
 library(ggpubr)
+library(Rfast)
 
 # load data ------
 load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/Malawi_cluster_dat.rda")
@@ -27,6 +28,7 @@ for(area in 1:nrow(admin1.mat)){
        admin2.mat.nested[area2,adm2_areas_tmp] <- admin2.mat[area2,adm2_areas_tmp]/sum(admin2.mat[area2,adm2_areas_tmp])}
   }
 }
+load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/shapeFiles_gadm/Malawi_Amat_names.rda")
 
 # get weights for aggregating from admin2 to admin 1
 load("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/Malawi/worldpop/adm1_weights_u1.rda")
@@ -48,7 +50,199 @@ adm1_UR_weights <- gather(adm1_UR_weights,strata,proportion,urban:rural)
 adm2_UR_weights <- readRDS("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Results/Malawi/UR/U1_fraction/admin2_u1_urban_weights.rds")
 adm2_UR_weights <- gather(adm2_UR_weights,strata,proportion,urban:rural)
 
-# fit models -----
+# INLA hyperpriors ------
+hyper.rw2 <-  list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+hyper.ar1 = list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
+                 theta2 = list(prior = "pc.cor1",param = c(0.7, 0.9)))
+hyper.bym2 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
+                   phi = list(prior = "pc",  param = c(0.5, 2/3)))
+
+# fit models as if 1 year of data ----
+dat_t <- dat[dat$survey==2015 & dat$years%in%2009:2012,]
+adm1_UR_weights_t <- adm1_UR_weights[adm1_UR_weights$years==2011,]
+adm1_UR_weights_t <- spread(adm1_UR_weights_t,strata,proportion) %>% select(-years)
+adm2_to_adm1_weights_t <- adm2_to_adm1_weights[adm2_to_adm1_weights$years==2011,]
+
+#mod1: just admin1 (fixed effect) -- may not have enough data if only 1 year of data is included/many admin1 areas
+mod1 <- INLA::inla(Y ~ urban + factor(admin1) -1,
+                   data=dat_t, family='nbinomial', E=total,
+                   control.predictor = list(compute = T, link = 1),
+                   control.family = list(link = 'log'),
+                   control.compute = list(return.marginals=T, 
+                                          return.marginals.predictor=T,config=T))
+
+# sample from whole joint posterior and from marginal fixed effects posterior gives same thing (which it should because this is just a fixed effects model)
+
+
+mod3 <- INLA::inla(Y ~ -1 + urban + factor(admin1) + 
+                    f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.bym2, 
+                      constr=T, scale.model = T, adjust.for.con.comp = T), #this combination forces sum-to-zero constraints on islands
+                  data=dat_t, family='nbinomial', E=total,
+                  control.predictor = list(compute = T, link = 1),
+                  control.family = list(link = 'log'),
+                   control.compute = list(return.marginals=T, 
+                                          return.marginals.predictor=T,
+                                          config=T))
+nsim <- 1000
+# sample from full posterior
+{
+  cs <- mod3$misc$configs$contents$tag
+  cs <- cs[cs != "Predictor"]
+  select <- list()
+    for (i in 1:length(cs)) {
+      select[[i]] <- 0
+      names(select)[i] <- cs[i]
+    }
+  
+  sampFull <- INLA::inla.posterior.sample(n = nsim, result = mod3, intern = TRUE, selection = select)
+  sampFull.draws <- matrix(NA,nsim,length(sampFull[[1]]$latent))
+  for(i in 1:nsim){
+    sampFull.draws[i,] <- sampFull[[i]]$latent
+  }
+  colnames(sampFull.draws) <- row.names(sampFull[[1]]$latent)
+  #which columns pertain to which factor
+  admin2.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin2'))
+  admin1.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin1'))
+  strata.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'urban'))
+  
+  ## get admin2 stratified estimates
+  outFull <- expand.grid(urban = unique(dat_t$urban),admin2.char = unique(dat_t$admin2.char))
+  outFull <- merge(outFull,admin_key)
+  outFull$admin2 <- as.numeric(str_remove(outFull$admin2.char,'admin2_'))
+  outFull$admin1 <- as.numeric(str_remove(outFull$admin1.char,'admin1_'))
+  outFull <- outFull[order(outFull$admin2),]
+  # binary matrix which specifies which columns to index for a given combination of factors
+  AA.loc <- matrix(0,nrow(outFull),ncol(sampFull.draws))
+  for(k in 1:max(dat_t$admin2)){
+    AA.loc[,admin2.cols[k]] <- I(outFull$admin2==k)
+  }
+  for(k in 2:max(dat_t$admin1)){
+    AA.loc[,admin1.cols[k-1]] <- I(outFull$admin1==k)
+  }
+  AA.loc[,strata.cols[1]] <- I(outFull$urban=='urban')
+  AA.loc[,strata.cols[2]] <- 1 - I(outFull$urban=='urban')
+  
+  AA <- sampFull.draws %*% t(AA.loc)
+
+  outFull$log.mean <- colMeans(AA)
+  outFull$mean <- colMeans(exp(AA))
+  outFull$median <- colMedians(exp(AA))
+  outFull$variance <- colVars(exp(AA))
+  outFull$lower <- apply(exp(AA),2,quantile,0.05)
+  outFull$upper <- apply(exp(AA),2,quantile,0.95)
+  
+  ## get admin 1 stratified estimates
+  outFullStrat <- expand.grid(urban = unique(dat_t$urban),admin1.char = unique(dat_t$admin1.char))
+  outFullStrat$admin1 <- as.numeric(str_remove(outFullStrat$admin1.char,'admin1_'))
+  outFullStrat <- outFullStrat[order(outFullStrat$admin1),]
+  # matrix which specifies which columns to include and how to weight them
+  AA.wt <- matrix(0,nrow(outFullStrat),ncol(sampFull.draws))
+  for(k in 1:max(dat_t$admin1)){
+    #include admin1 FE
+    if(k>1){
+      AA.wt[,admin1.cols[k-1]] <- I(outFullStrat$admin1==k)
+    }
+    #include weights for admin2s -- really convoluted but it works
+    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
+    for(m in unique(dat_t$admin2)){
+      name_t <- paste0('admin2_',m)
+      if(name_t %in% adm2_weights_t$region)
+        AA.wt[,admin2.cols[m]] <- adm2_weights_t[adm2_weights_t$region==name_t,]$proportion*I(outFullStrat$admin1==k)
+    }
+  }
+  AA.wt[,strata.cols[1]] <- I(outFullStrat$urban=='urban')
+  AA.wt[,strata.cols[2]] <- 1 - I(outFullStrat$urban=='urban')
+
+  AA <- sampFull.draws %*% t(AA.wt)
+  outFullStrat$log.mean <- colMeans(AA)
+  outFullStrat$mean <- colMeans(exp(AA))
+  outFullStrat$median <- colMedians(exp(AA))
+  outFullStrat$variance <- colVars(exp(AA))
+  outFullStrat$lower <- apply(exp(AA),2,quantile,0.05)
+  outFullStrat$upper <- apply(exp(AA),2,quantile,0.95)
+  
+  ## get admin 1 overall estimates
+  outFullOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
+  outFullOverall$admin1.char <- paste0('admin1_', outFullOverall$admin1)
+  # matrix which specifies which columns to include and how to weight them
+  AA.wt <- matrix(0,nrow(outFullOverall),ncol(sampFull.draws))
+  for(k in 1:max(dat_t$admin1)){
+    #include admin1 FE
+    if(k>1){
+      AA.wt[,admin1.cols[k-1]] <- I(outFullOverall$admin1==k)
+    }
+    #include weights for admin2s -- really convoluted but it works
+    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
+    for(m in unique(dat_t$admin2)){
+      name_t <- paste0('admin2_',m)
+      if(name_t %in% adm2_weights_t$region)
+        AA.wt[,admin2.cols[m]] <- adm2_weights_t[adm2_weights_t$region==name_t,]$proportion*I(outFullOverall$admin1==k)
+    }
+  }
+  #include weights for urban/rural
+  AA.wt[,strata.cols[1]] <- adm1_UR_weights_t$urban
+  AA.wt[,strata.cols[2]] <- adm1_UR_weights_t$rural
+  
+  AA <- sampFull.draws %*% t(AA.wt)
+  outFullOverall$log.mean <- colMeans(AA)
+  outFullOverall$mean <- colMeans(exp(AA))
+  outFullOverall$median <- colMedians(exp(AA))
+  outFullOverall$variance <- colVars(exp(AA))
+  outFullOverall$lower <- apply(exp(AA),2,quantile,0.05)
+  outFullOverall$upper <- apply(exp(AA),2,quantile,0.95)
+}
+
+# sample from marginal fixed effects posterior
+{
+  sampMarg <- matrix(unlist(lapply(mod3$marginals.fixed,inla.rmarginal,n=nsim)),nrow=nsim,byrow = F)
+  colnames(sampMarg) <- names(mod3$marginals.fixed)
+  
+  ## get stratified estimates
+  outMargStrat <- expand.grid(urban=unique(dat_t$urban), admin1.char = unique(dat_t$admin1.char))
+  outMargStrat$admin1 <- as.numeric(str_remove(outMargStrat$admin1.char,'admin1_'))
+  outMargStrat <- dat_t %>% select(urban,admin1.char,admin1) %>% unique() %>% arrange(admin1.char,urban)
+  outMargStrat <- outMargStrat[order(outMargStrat$admin1),]
+  
+  AA.loc <- matrix(NA,nrow(outMargStrat),ncol(sampMarg))
+  AA.loc[,1] <- I(outMargStrat$urban=='urban')
+  AA.loc[,2] <- 1 - I(outMargStrat$urban=='urban')
+  for(k in 2:max(dat_t$admin1)){
+    AA.loc[,(k+1)] <- I(outMargStrat$admin1==k)
+  }
+  
+  AA <- sampMarg %*% t(AA.loc)
+  outMargStrat$log.mean <- colMeans(AA)
+  outMargStrat$mean <- colMeans(exp(AA))
+  outMargStrat$median <- colMedians(exp(AA))
+  outMargStrat$variance <- colVars(exp(AA))
+  outMargStrat$lower <- apply(exp(AA),2,quantile,0.05)
+  outMargStrat$upper <- apply(exp(AA),2,quantile,0.95)
+  
+  ## get overall estimates
+  outMargOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
+  outMargOverall$admin1.char <- paste0('admin1_', outMargOverall$admin1)
+  
+  AA.wt <- matrix(NA,nrow(outMargOverall),ncol(sampMarg))
+  AA.wt[,1] <- adm1_UR_weights_t$urban
+  AA.wt[,2] <- adm1_UR_weights_t$rural
+  for(k in 2:max(dat_t$admin1)){
+    AA.wt[,(k+1)] <- I(adm1_UR_weights_t$region==paste0('admin1_',k))
+  }
+  
+  AA <- sampMarg %*% t(AA.wt)
+  outMargOverall$log.mean <- colMeans(AA)
+  outMargOverall$mean <- colMeans(exp(AA))
+  outMargOverall$median <- colMedians(exp(AA))
+  outMargOverall$variance <- colVars(exp(AA))
+  outMargOverall$lower <- apply(exp(AA),2,quantile,0.05)
+  outMargOverall$upper <- apply(exp(AA),2,quantile,0.95)
+  
+}
+
+# compare outMargOverall and outFullOverall
+
+
+# fit models with time component -----
 plot_list <- list()
 for(survey_t in c(2010,2014,2015,2020)){
   #data
@@ -71,13 +265,6 @@ adm1_sd_est <- getSmoothed(adm1_sd_fit, Amat = admin1.mat, CI=0.95,
                            year_range = 2000:2015, control.compute=list(cpo=T))
 
 adm1_sd_est$mean <- (adm1_sd_est$upper - adm1_sd_est$lower)/2 + adm1_sd_est$lower
-
-  # INLA hyperpriors ------
-hyper.rw2 <-  list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
-hyper.ar1 = list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
-                 theta2 = list(prior = "pc.cor1",param = c(0.7, 0.9)))
-hyper.bym2 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
-                   phi = list(prior = "pc",  param = c(0.5, 2/3)))
 
   #mod1: just admin1 (fixed effect) -- may not have enough data if only 1 year of data is included/many admin1 areas -----
   mod1 <- INLA::inla(Y ~ urban + factor(admin1) +
