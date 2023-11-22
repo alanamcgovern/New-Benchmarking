@@ -3,18 +3,17 @@ library(SUMMER)
 library(tidyverse)
 library(ggpubr)
 library(Rfast)
+source("/Users/alanamcgovern/Desktop/Research/New Benchmarking/getAggregated.R")
 
 all.ests <- NULL
+cpo.res <- NULL
 
-country_t <- 'Guinea' # country being used
-shapeFiles_folder_name <- 'shapeFiles/gadm41_GIN_shp'
+country_t <- c('Malawi','Sierra_Leone','Rwanda','Liberia','Guinea','Burundi')[2] # country being used
+shapeFiles_folder_name <- c('shapeFiles','shapeFiles_gadm',
+                            'shapeFiles/gadm41_RWA_shp','shapeFiles/gadm41_GIN_shp',
+                            'shapeFiles/gadm41_LBR_shp')[1]
 beg.years <- c(2000,2004,2008,2012,2016)
-end.years <- c(2003,2007,2011,2015,2018)
-
-country_t <- 'Malawi' # country being used
-shapeFiles_folder_name <- 'shapeFiles_gadm'
-beg.years <- c(2000,2004,2007,2010,2013)
-end.years <- c(2003,2006,2009,2012,2015)
+end.years <- c(2003,2007,2011,2015,2019)
 
 # load data ------
 data.dir <- (paste0("/Users/alanamcgovern/Desktop/Research/UN_Estimates/UN-Subnational-Estimates/Data/",country_t,'/'))
@@ -66,8 +65,9 @@ adm1_UR_weights <- gather(adm1_UR_weights,strata,proportion,urban:rural)
 adm2_UR_weights <- readRDS(paste0(res.dir,"UR/U1_fraction/admin2_u1_urban_weights.rds"))
 adm2_UR_weights <- gather(adm2_UR_weights,strata,proportion,urban:rural)
 
-## ------
+# fit models without temporal component (as if all data is 1 year) ------
 for(period in 1:length(beg.years)){
+  cat('Starting period', period,'\n')
 # organize data for modeling -----
 data_years <- beg.years[period]:end.years[period] # years of data included
 ref_year <- 2014 # year used from population weights
@@ -88,93 +88,11 @@ adm1_UR_weights_t <- adm1_UR_weights[adm1_UR_weights$years==ref_year,]
 adm1_UR_weights_t <- spread(adm1_UR_weights_t,strata,proportion) %>% select(-years)
 adm2_to_adm1_weights_t <- adm2_to_adm1_weights[adm2_to_adm1_weights$years==ref_year,]
 adm1_weights_t <- adm1_weights[adm1_weights$years==ref_year,]
+adm2_weights_t <- adm2_weights[adm2_weights$years==ref_year,]
 
 # functions to draw from posterior and obtain summaries -----
 
-getSmoothedFullPost <- function(inla_mod,data,nsim=1000,
-                            admin1.weights=NULL,admin1.UR.weights=NULL){
-  
-  # data frame for admin 1 overall estimates
-  outFullOverall <- data.frame(admin1 = 1:max(data$admin1))
-  outFullOverall$admin1.char <- paste0('admin1_', outFullOverall$admin1)
-  
-  # sample from posterior
-  cs <- inla_mod$misc$configs$contents$tag
-  cs <- cs[cs != "Predictor"]
-  select <- list()
-  for (i in 1:length(cs)) {
-    select[[i]] <- 0
-    names(select)[i] <- cs[i]
-  }
-  
-  sampFull <- INLA::inla.posterior.sample(n = nsim, result = inla_mod, intern = TRUE, selection = select)
-  sampFull.draws <- matrix(NA,nsim,length(sampFull[[1]]$latent))
-  for(i in 1:nsim){
-    sampFull.draws[i,] <- sampFull[[i]]$latent
-  }
-  fields <- colnames(sampFull.draws) <- row.names(sampFull[[1]]$latent)
-  
-  ## matrix which specifies which columns to include and how to weight them for admin1 overall
-  AA.wt.adm1 <- matrix(0,nrow = length(fields),ncol = max(data$admin1))
-  # matrix which specifies which columns to include and how to weight them for national
-  AA.wt.natl <- rep(0,ncol(sampFull.draws))
-  
-  for(k in 1:max(data$admin1)){
-  # add admin1 effects (if in model)
-    col.id <- which(paste0("factor(admin1)",k,":1") == fields)
-    if(length(col.id)==1){
-      AA.wt.adm1[col.id,] <- I(outFullOverall$admin1==k)
-      AA.wt.natl[col.id] <- admin1.weights[admin1.weights$region==paste0('admin1_',k),]$proportion
-    }
-    
-  # add weights for admin1.strata effects (if in model)
-    urban.id <- which(paste0("factor(admin1.strata)",k,":1") == fields)
-    if(length(urban.id)==1){
-      AA.wt.adm1[urban.id,] <- I(outFullOverall$admin1==k)*admin1.UR.weights$urban[k]
-      AA.wt.natl[urban.id] <- admin1.weights$proportion[k]*admin1.UR.weights$urban[k]
-    }
-    rural.id <- which(paste0("factor(admin1.strata)",k+max(data$admin1),":1") == fields)
-    if(length(rural.id)==1){
-      AA.wt.adm1[rural.id,] <- I(outFullOverall$admin1==k)*admin1.UR.weights$rural[k]
-      AA.wt.natl[rural.id] <- admin1.weights$proportion[k]*admin1.UR.weights$rural[k]
-    }
-  }
-  # add weights for urban/rural (if in model)
-  rural.id <- which("factor(strata)0:1" == fields)
-  if(length(rural.id)==1){
-    AA.wt.adm1[rural.id,] <- admin1.UR.weights$rural
-    AA.wt.natl[rural.id] <- sum(admin1.UR.weights$rural*admin1.weights$proportion)
-  }
-  urban.id <- which("factor(strata)1:1" == fields)
-  if(length(urban.id)==1){
-    AA.wt.adm1[urban.id,] <- admin1.UR.weights$urban
-    AA.wt.natl[urban.id] <- sum(admin1.UR.weights$urban*admin1.weights$proportion)
-  }
-  # add weights for any admin2 effects (if in model)
-  
-  ## admin1 estimates
-  AA.adm1 <- sampFull.draws %*% AA.wt.adm1
-  outFullOverall$log.mean <- colMeans(AA.adm1)
-  outFullOverall$mean <- colMeans(exp(AA.adm1))
-  outFullOverall$median <- colMedians(exp(AA.adm1))
-  outFullOverall$variance <- colVars(exp(AA.adm1))
-  outFullOverall$lower <- apply(exp(AA.adm1),2,quantile,0.05)
-  outFullOverall$upper <- apply(exp(AA.adm1),2,quantile,0.95)
-  
-  ## national estimates
-  AA.natl <- sampFull.draws %*% AA.wt.natl
-  outFullNatl <- data.frame(mean = colMeans(exp(AA.natl)))
-  outFullNatl$log.mean <- colMeans(AA.natl)
-  outFullNatl$median <- colMedians(exp(AA.natl))
-  outFullNatl$variance <- colVars(exp(AA.natl))
-  outFullNatl$lower <- apply(exp(AA.natl),2,quantile,0.05)
-  outFullNatl$upper <- apply(exp(AA.natl),2,quantile,0.95)
-  
-  return(list(adm1.est = outFullOverall, natl.est = outFullNatl))
-}
 
-
-# fit models without temporal component (as if all data is 1 year) ------
 hyper.bym2 <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)), 
                    phi = list(prior = "pc",  param = c(0.5, 2/3)))
 nsim <- 1000
@@ -197,10 +115,11 @@ mod1 <- INLA::inla(Y ~ factor(strata) + factor(admin1) -1,
                    control.predictor = list(compute = T, link = 1),
                    control.family = list(link = 'log'),
                    control.compute = list(return.marginals=T, 
-                                          return.marginals.predictor=T,config=T))
+                                          return.marginals.predictor=T,config=T,
+                                          cpo=T))
 
 # sample from full posterior
-mod1.est <- getSmoothedFullPost(mod1,dat_t,admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t)
+mod1.est <- getAggregated(mod1,dat_t,admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t)
 mod1.adm1 <- mod1.est$adm1.est
 mod1.natl <- mod1.est$natl.est
 
@@ -213,389 +132,137 @@ mod1b <- INLA::inla(Y ~ -1 + factor(strata) + factor(admin1) +
                     control.family = list(link = 'log'),
                     control.compute = list(return.marginals=T, 
                                            return.marginals.predictor=T,
-                                           config=T))
-nsim <- 1000
+                                           config=T, cpo=T))
 # sample from full posterior
-{
-  cs <- mod1b$misc$configs$contents$tag
-  cs <- cs[cs != "Predictor"]
-  select <- list()
-  for (i in 1:length(cs)) {
-    select[[i]] <- 0
-    names(select)[i] <- cs[i]
-  }
-  
-  sampFull <- INLA::inla.posterior.sample(n = nsim, result = mod1b, intern = TRUE, selection = select)
-  sampFull.draws <- matrix(NA,nsim,length(sampFull[[1]]$latent))
-  for(i in 1:nsim){
-    sampFull.draws[i,] <- sampFull[[i]]$latent
-  }
-  colnames(sampFull.draws) <- row.names(sampFull[[1]]$latent)
-  #which columns pertain to which factor
-  admin2.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin2'))
-  admin1.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'(admin1)'))
-  strata.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'strata'))
-  
-  ## get admin2 stratified estimates
-  outFull <- expand.grid(urban = unique(dat_t$urban),admin2.char = unique(dat_t$admin2.char))
-  outFull <- merge(outFull,admin_key)
-  outFull$admin2 <- as.numeric(str_remove(outFull$admin2.char,'admin2_'))
-  outFull$admin1 <- as.numeric(str_remove(outFull$admin1.char,'admin1_'))
-  outFull <- outFull[order(outFull$admin2),]
-  # binary matrix which specifies which columns to index for a given combination of factors
-  AA.loc <- matrix(0,nrow(outFull),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin2)){
-    AA.loc[,admin2.cols[k]] <- I(outFull$admin2==k)
-  }
-  for(k in 2:max(dat_t$admin1)){
-    AA.loc[,admin1.cols[k-1]] <- I(outFull$admin1==k)
-  }
-  AA.loc[,strata.cols[2]] <- I(outFull$urban=='urban')
-  AA.loc[,strata.cols[1]] <- 1 - I(outFull$urban=='urban')
-  
-  AA <- sampFull.draws %*% t(AA.loc)
-  
-  outFull$log.mean <- colMeans(AA)
-  outFull$mean <- colMeans(exp(AA))
-  outFull$median <- colMedians(exp(AA))
-  outFull$variance <- colVars(exp(AA))
-  outFull$lower <- apply(exp(AA),2,quantile,0.05)
-  outFull$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get admin 1 stratified estimates
-  outFullStrat <- expand.grid(urban = unique(dat_t$urban),admin1.char = unique(dat_t$admin1.char))
-  outFullStrat$admin1 <- as.numeric(str_remove(outFullStrat$admin1.char,'admin1_'))
-  outFullStrat <- outFullStrat[order(outFullStrat$admin1),]
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullStrat),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include admin1 FE
-    if(k>1){
-      AA.wt[,admin1.cols[k-1]] <- I(outFullStrat$admin1==k)
-    }
-    #include weights for admin2s -- really convoluted but it works
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in unique(dat_t$admin2)){
-      name_t <- paste0('admin2_',m)
-      if(name_t %in% adm2_weights_t$region)
-        AA.wt[,admin2.cols[m]] <- adm2_weights_t[adm2_weights_t$region==name_t,]$proportion*I(outFullStrat$admin1==k)
-    }
-  }
-  AA.wt[,strata.cols[2]] <- I(outFullStrat$urban=='urban')
-  AA.wt[,strata.cols[1]] <- 1 - I(outFullStrat$urban=='urban')
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullStrat$log.mean <- colMeans(AA)
-  outFullStrat$mean <- colMeans(exp(AA))
-  outFullStrat$median <- colMedians(exp(AA))
-  outFullStrat$variance <- colVars(exp(AA))
-  outFullStrat$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullStrat$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get admin 1 overall estimates
-  outFullOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
-  outFullOverall$admin1.char <- paste0('admin1_', outFullOverall$admin1)
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullOverall),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include admin1 FE
-    if(k>1){
-      AA.wt[,admin1.cols[k-1]] <- I(outFullOverall$admin1==k)
-    }
-    #include weights for admin2s -- really convoluted but it works
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in unique(dat_t$admin2)){
-      name_t <- paste0('admin2_',m)
-      if(name_t %in% adm2_weights_t$region)
-        AA.wt[,admin2.cols[m]] <- adm2_weights_t[adm2_weights_t$region==name_t,]$proportion*I(outFullOverall$admin1==k)
-    }
-  }
-  #include weights for urban/rural
-  AA.wt[,strata.cols[2]] <- adm1_UR_weights_t$urban
-  AA.wt[,strata.cols[1]] <- adm1_UR_weights_t$rural
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullOverall$log.mean <- colMeans(AA)
-  outFullOverall$mean <- colMeans(exp(AA))
-  outFullOverall$median <- colMedians(exp(AA))
-  outFullOverall$variance <- colVars(exp(AA))
-  outFullOverall$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullOverall$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get national estimates
-  AA.wt <- rep(0,ncol(sampFull.draws))
-  for(k in 2:max(dat_t$admin1)){
-    #include admin1 FE
-    AA.wt[admin1.cols[k-1]] <- adm1_weights_t[adm1_weights_t$region==paste0('admin1_',k),]$proportion
-  }
-  for(k in 1:max(dat_t$admin2)){
-    #include weights for admin2s
-    AA.wt[admin2.cols[k]] <- adm2_weights[adm2_weights$years==ref_year & adm2_weights$region==paste0('admin2_',k),]$proportion
-  }
-  #include weights for urban/rural
-  AA.wt[strata.cols[2]] <- sum(adm1_UR_weights_t$urban*adm1_weights_t$proportion)
-  AA.wt[strata.cols[1]] <- sum(adm1_UR_weights_t$rural*adm1_weights_t$proportion)
-  
-  AA <- sampFull.draws %*% AA.wt
-  outFullNatl <- data.frame(mean = colMeans(exp(AA)))
-  outFullNatl$log.mean <- colMeans(AA)
-  outFullNatl$median <- colMedians(exp(AA))
-  outFullNatl$variance <- colVars(exp(AA))
-  outFullNatl$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullNatl$upper <- apply(exp(AA),2,quantile,0.95)
-  
-}
-
-mod1b.adm2.strat <- outFull
-mod1b.adm1.strat <- outFullStrat
-mod1b.adm1 <- outFullOverall
-mod1b.natl <- outFullNatl
+mod1b.est <- getAggregated(mod1b,dat_t,
+                           admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t,
+                           admin2.weights = adm2_weights_t,admin2.to.admin1.weights = adm2_to_adm1_weights_t)
+mod1b.adm1 <- mod1b.est$adm1.est
+mod1b.natl <- mod1b.est$natl.est
 
 # sample from marginal fixed effects posterior
-{
-  sampMarg <- matrix(unlist(lapply(mod1b$marginals.fixed,inla.rmarginal,n=nsim)),nrow=nsim,byrow = F)
-  colnames(sampMarg) <- names(mod1b$marginals.fixed)
-  
-  ## get stratified estimates
-  outMargStrat <- expand.grid(urban=unique(dat_t$urban), admin1.char = unique(dat_t$admin1.char))
-  outMargStrat$admin1 <- as.numeric(str_remove(outMargStrat$admin1.char,'admin1_'))
-  outMargStrat <- dat_t %>% select(urban,admin1.char,admin1) %>% unique() %>% arrange(admin1.char,urban)
-  outMargStrat <- outMargStrat[order(outMargStrat$admin1),]
-  
-  AA.loc <- matrix(NA,nrow(outMargStrat),ncol(sampMarg))
-  AA.loc[,2] <- I(outMargStrat$urban=='urban')
-  AA.loc[,1] <- 1 - I(outMargStrat$urban=='urban')
-  for(k in 2:max(dat_t$admin1)){
-    AA.loc[,(k+1)] <- I(outMargStrat$admin1==k)
-  }
-  
-  AA <- sampMarg %*% t(AA.loc)
-  outMargStrat$log.mean <- colMeans(AA)
-  outMargStrat$mean <- colMeans(exp(AA))
-  outMargStrat$median <- colMedians(exp(AA))
-  outMargStrat$variance <- colVars(exp(AA))
-  outMargStrat$lower <- apply(exp(AA),2,quantile,0.05)
-  outMargStrat$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get overall estimates
-  outMargOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
-  outMargOverall$admin1.char <- paste0('admin1_', outMargOverall$admin1)
-  
-  AA.wt <- matrix(NA,nrow(outMargOverall),ncol(sampMarg))
-  AA.wt[,2] <- adm1_UR_weights_t$urban
-  AA.wt[,1] <- adm1_UR_weights_t$rural
-  for(k in 2:max(dat_t$admin1)){
-    AA.wt[,(k+1)] <- I(adm1_UR_weights_t$region==paste0('admin1_',k))
-  }
-  
-  AA <- sampMarg %*% t(AA.wt)
-  outMargOverall$log.mean <- colMeans(AA)
-  outMargOverall$mean <- colMeans(exp(AA))
-  outMargOverall$median <- colMedians(exp(AA))
-  outMargOverall$variance <- colVars(exp(AA))
-  outMargOverall$lower <- apply(exp(AA),2,quantile,0.05)
-  outMargOverall$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  mod1b.outMargStrat <- outMargStrat
-  mod1b.outMargOverall <- outMargOverall
-  
-}
+# {
+#   sampMarg <- matrix(unlist(lapply(mod1b$marginals.fixed,inla.rmarginal,n=nsim)),nrow=nsim,byrow = F)
+#   colnames(sampMarg) <- names(mod1b$marginals.fixed)
+#   
+#   ## get stratified estimates
+#   outMargStrat <- expand.grid(urban=unique(dat_t$urban), admin1.char = unique(dat_t$admin1.char))
+#   outMargStrat$admin1 <- as.numeric(str_remove(outMargStrat$admin1.char,'admin1_'))
+#   outMargStrat <- dat_t %>% select(urban,admin1.char,admin1) %>% unique() %>% arrange(admin1.char,urban)
+#   outMargStrat <- outMargStrat[order(outMargStrat$admin1),]
+#   
+#   AA.loc <- matrix(NA,nrow(outMargStrat),ncol(sampMarg))
+#   AA.loc[,2] <- I(outMargStrat$urban=='urban')
+#   AA.loc[,1] <- 1 - I(outMargStrat$urban=='urban')
+#   for(k in 2:max(dat_t$admin1)){
+#     AA.loc[,(k+1)] <- I(outMargStrat$admin1==k)
+#   }
+#   
+#   AA <- sampMarg %*% t(AA.loc)
+#   outMargStrat$log.mean <- colMeans(AA)
+#   outMargStrat$mean <- colMeans(exp(AA))
+#   outMargStrat$median <- colMedians(exp(AA))
+#   outMargStrat$variance <- colVars(exp(AA))
+#   outMargStrat$lower <- apply(exp(AA),2,quantile,0.05)
+#   outMargStrat$upper <- apply(exp(AA),2,quantile,0.95)
+#   
+#   ## get overall estimates
+#   outMargOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
+#   outMargOverall$admin1.char <- paste0('admin1_', outMargOverall$admin1)
+#   
+#   AA.wt <- matrix(NA,nrow(outMargOverall),ncol(sampMarg))
+#   AA.wt[,2] <- adm1_UR_weights_t$urban
+#   AA.wt[,1] <- adm1_UR_weights_t$rural
+#   for(k in 2:max(dat_t$admin1)){
+#     AA.wt[,(k+1)] <- I(adm1_UR_weights_t$region==paste0('admin1_',k))
+#   }
+#   
+#   AA <- sampMarg %*% t(AA.wt)
+#   outMargOverall$log.mean <- colMeans(AA)
+#   outMargOverall$mean <- colMeans(exp(AA))
+#   outMargOverall$median <- colMedians(exp(AA))
+#   outMargOverall$variance <- colVars(exp(AA))
+#   outMargOverall$lower <- apply(exp(AA),2,quantile,0.05)
+#   outMargOverall$upper <- apply(exp(AA),2,quantile,0.95)
+#   
+#   mod1b.outMargStrat <- outMargStrat
+#   mod1b.outMargOverall <- outMargOverall
+#   
+# }
 
 # mod2: urban*admin1 (fixed) -----
 mod2 <- INLA::inla(Y ~ -1 + factor(admin1.strata),
                    data=dat_t, family='nbinomial', E=total,
                     control.predictor = list(compute = T, link = 1),
                     control.family = list(link = 'log'),
-                    control.compute = list(config=T))
+                    control.compute = list(config=T,cpo=T))
 
 # sample from full posterior
-mod2.est <- getSmoothedFullPost(mod2,dat_t,admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t)
+mod2.est <- getAggregated(mod2,dat_t,admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t)
 mod2.adm1 <- mod2.est$adm1.est
 mod2.natl <- mod2.est$natl.est
 
-# mod2b: admin1 x urban (fixed) + admin2 (BYM2) ------
-mod2b <- INLA::inla(Y ~ -1 + factor(admin1.strata) + 
-                      f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.bym2, 
-                        constr=T, scale.model = T, adjust.for.con.comp = T), #this combination forces sum-to-zero constraints on islands
-                    data=dat_t, family='nbinomial', E=total,
-                    control.predictor = list(compute = T, link = 1),
-                    control.family = list(link = 'log'),
-                    control.compute = list(return.marginals=T, 
-                                           return.marginals.predictor=T,
-                                           config=T))
-
-# sample from full posterior -- estimates are very close to INLA summary output (but very slightly shrunken on average)
-{
-  cs <- mod2b$misc$configs$contents$tag
-  cs <- cs[cs != "Predictor"]
-  select <- list()
-  for (i in 1:length(cs)) {
-    select[[i]] <- 0
-    names(select)[i] <- cs[i]
-  }
-  
-  sampFull <- INLA::inla.posterior.sample(n = nsim, result = mod2b, intern = TRUE, selection = select)
-  sampFull.draws <- matrix(NA,nsim,length(sampFull[[1]]$latent))
-  for(i in 1:nsim){
-    sampFull.draws[i,] <- sampFull[[i]]$latent
-  }
-  colnames(sampFull.draws) <- row.names(sampFull[[1]]$latent)
-  
-  ## get admin2 stratified estimates
-  # could generalize by defining all potential variables (interactions)
-  outFull <- expand.grid(urban = unique(dat_t$urban),admin2.char = unique(dat_t$admin2.char))
-  outFull <- merge(outFull,admin_key)
-  outFull$admin2 <- as.numeric(str_remove(outFull$admin2.char,'admin2_'))
-  outFull$admin1 <- as.numeric(str_remove(outFull$admin1.char,'admin1_'))
-  outFull <- outFull[order(outFull$admin2),]
-  outFull$strata <- as.numeric(I(outFull$urban)=='urban')
-  outFull$admin1.strata <- outFull$admin1 + (1-outFull$strata)*max(outFull$admin1)
-  
-  # binary matrix which specifies which columns to index for a given combination of factors
-  # just changes based on whatever terms included in model (need to be careful if one factor includes intercept)
-  admin2.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin2'))
-  admin1.strata.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin1.strata'))
-  AA.loc <- matrix(0,nrow(outFull),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin2)){
-    AA.loc[,admin2.cols[k]] <- I(outFull$admin2==k)
-  }
-  for(k in 1:max(dat_t$admin1.strata)){
-    AA.loc[,admin1.strata.cols[k]] <- I(outFull$admin1.strata==k)
-  }
-  
-  AA <- sampFull.draws %*% t(AA.loc)
-  
-  outFull$log.mean <- colMeans(AA)
-  outFull$mean <- colMeans(exp(AA))
-  outFull$median <- colMedians(exp(AA))
-  outFull$variance <- colVars(exp(AA))
-  outFull$lower <- apply(exp(AA),2,quantile,0.05)
-  outFull$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get admin 1 stratified estimates
-  outFullStrat <- expand.grid(urban = unique(dat_t$urban),admin1.char = unique(dat_t$admin1.char))
-  outFullStrat$admin1 <- as.numeric(str_remove(outFullStrat$admin1.char,'admin1_'))
-  outFullStrat <- outFullStrat[order(outFullStrat$admin1),]
-  outFullStrat$strata <- as.numeric(I(outFullStrat$urban)=='urban')
-  outFullStrat$admin1.strata <- outFullStrat$admin1 + (1-outFullStrat$strata)*max(outFullStrat$admin1)
-  
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullStrat),ncol(sampFull.draws))
-  #include admin1 FE
-  for(k in 1:max(dat_t$admin1.strata)){
-    AA.wt[,admin1.strata.cols[k]] <- I(outFullStrat$admin1.strata==k)
-  }
-  #include weights for admin2s
-  for(k in 1:max(dat_t$admin1)){
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in adm2_weights_t$region){
-      AA.wt[,admin2.cols[as.numeric(str_remove(m,'admin2_'))]] <- adm2_weights_t[adm2_weights_t$region==m,]$proportion*I(outFullStrat$admin1==k)
-    }
-  }
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullStrat$log.mean <- colMeans(AA)
-  outFullStrat$mean <- colMeans(exp(AA))
-  outFullStrat$median <- colMedians(exp(AA))
-  outFullStrat$variance <- colVars(exp(AA))
-  outFullStrat$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullStrat$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get admin 1 overall estimates
-  outFullOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
-  outFullOverall$admin1.char <- paste0('admin1_', outFullOverall$admin1)
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullOverall),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include weights for admin2s
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in unique(dat_t$admin2)){
-      name_t <- paste0('admin2_',m)
-      if(name_t %in% adm2_weights_t$region)
-        AA.wt[,admin2.cols[m]] <- adm2_weights_t[adm2_weights_t$region==name_t,]$proportion*I(outFullOverall$admin1==k)
-    }
-    #include urban rural weights
-    strata_weights_t <- adm1_UR_weights_t[adm1_UR_weights_t$region==paste0('admin1_',k),]
-    AA.wt[,admin1.strata.cols[k]] <- strata_weights_t$urban*I(outFullOverall$admin1==k) #urban
-    AA.wt[,admin1.strata.cols[k + max(dat_t$admin1)]] <- strata_weights_t$rural*I(outFullOverall$admin1==k) #rural
-  }
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullOverall$log.mean <- colMeans(AA)
-  outFullOverall$mean <- colMeans(exp(AA))
-  outFullOverall$median <- colMedians(exp(AA))
-  outFullOverall$variance <- colVars(exp(AA))
-  outFullOverall$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullOverall$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get national estimates
-  AA.wt <- rep(0,ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include admin1 x strata FE
-    AA.wt[admin1.strata.cols[k]] <- adm1_weights_t[adm1_weights_t$region==paste0('admin1_',k),]$proportion*adm1_UR_weights_t[adm1_weights_t$region==paste0('admin1_',k),]$urban
-    AA.wt[admin1.strata.cols[k + max(dat_t$admin1)]] <- adm1_weights_t[adm1_weights_t$region==paste0('admin1_',k),]$proportion*adm1_UR_weights_t[adm1_weights_t$region==paste0('admin1_',k),]$rural
-  }
-  for(k in 1:max(dat_t$admin2)){
-    #include weights for admin2s
-    AA.wt[admin2.cols[k]] <- adm2_weights[adm2_weights$years==ref_year & adm2_weights$region==paste0('admin2_',k),]$proportion
-  }
-  
-  AA <- sampFull.draws %*% AA.wt
-  outFullNatl <- data.frame(mean = colMeans(exp(AA)))
-  outFullNatl$log.mean <- colMeans(AA)
-  outFullNatl$median <- colMedians(exp(AA))
-  outFullNatl$variance <- colVars(exp(AA))
-  outFullNatl$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullNatl$upper <- apply(exp(AA),2,quantile,0.95)
-}
-mod2b.adm2.strat <- outFull
-mod2b.adm1.strat <- outFullStrat
-mod2b.adm1 <- outFullOverall
-mod2b.natl <- outFullNatl
-
-# sample from marginal fixed effects posterior
-{
-  sampMarg <- matrix(unlist(lapply(mod2b$marginals.fixed,inla.rmarginal,n=nsim)),nrow=nsim,byrow = F)
-  colnames(sampMarg) <- names(mod2b$marginals.fixed)
-  
-  ## get stratified estimates (trivial because each grouping has its own parameter)
-  outMargStrat <- expand.grid(urban=unique(dat_t$urban), admin1.char = unique(dat_t$admin1.char))
-  outMargStrat$admin1 <- as.numeric(str_remove(outMargStrat$admin1.char,'admin1_'))
-  outMargStrat <- dat_t %>% select(urban,admin1.char,admin1) %>% unique() %>% arrange(admin1.char,urban)
-  outMargStrat <- outMargStrat[order(outMargStrat$admin1),]
-  outMargStrat$strata <- as.numeric(I(outMargStrat$urban=='urban'))
-  outMargStrat$admin1.strata <- outMargStrat$admin1 + (1-outMargStrat$strata)*max(outMargStrat$admin1)
-  
-  AA <- sampMarg
-  outMargStrat$log.mean <- colMeans(AA)
-  outMargStrat$mean <- colMeans(exp(AA))
-  outMargStrat$median <- colMedians(exp(AA))
-  outMargStrat$variance <- colVars(exp(AA))
-  outMargStrat$lower <- apply(exp(AA),2,quantile,0.05)
-  outMargStrat$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get overall estimates
-  outMargOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
-  outMargOverall$admin1.char <- paste0('admin1_', outMargOverall$admin1)
-  
-  AA.wt <- matrix(NA,nrow(outMargOverall),ncol(sampMarg))
-  for(k in 1:max(dat_t$admin1)){
-    weights_t <- adm1_UR_weights_t[adm1_UR_weights_t$region==paste0('admin1_',k),]
-    AA.wt[,k] <- weights_t$urban*I(outMargOverall$admin1==k) # urban weight
-    AA.wt[,(k + max(dat_t$admin1))] <- weights_t$rural*I(outMargOverall$admin1==k) # rural weight
-  }
-  
-  AA <- sampMarg %*% t(AA.wt)
-  outMargOverall$log.mean <- colMeans(AA)
-  outMargOverall$mean <- colMeans(exp(AA))
-  outMargOverall$median <- colMedians(exp(AA))
-  outMargOverall$variance <- colVars(exp(AA))
-  outMargOverall$lower <- apply(exp(AA),2,quantile,0.05)
-  outMargOverall$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  mod2b.outMargStrat <- outMargStrat
-  mod2b.outMargOverall <- outMargOverall
-}
+# # mod2b: admin1 x urban (fixed) + admin2 (BYM2) ------
+# mod2b <- INLA::inla(Y ~ -1 + factor(admin1.strata) + 
+#                       f(admin2, graph = (admin2.mat.nested),model = "bym2",hyper=hyper.bym2, 
+#                         constr=T, scale.model = T, adjust.for.con.comp = T), #this combination forces sum-to-zero constraints on islands
+#                     data=dat_t, family='nbinomial', E=total,
+#                     control.predictor = list(compute = T, link = 1),
+#                     control.family = list(link = 'log'),
+#                     control.compute = list(return.marginals=T, 
+#                                            return.marginals.predictor=T,
+#                                            config=T,cpo=T))
+# 
+# # sample from full posterior 
+# mod2b.est <- getAggregated(mod2b,dat_t,
+#                            admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t,
+#                            admin2.weights = adm2_weights_t,admin2.to.admin1.weights = adm2_to_adm1_weights_t)
+# mod2b.adm1 <- mod2b.est$adm1.est
+# mod2b.natl <- mod2b.est$natl.est
+# 
+# # sample from marginal fixed effects posterior
+# # {
+# #   sampMarg <- matrix(unlist(lapply(mod2b$marginals.fixed,inla.rmarginal,n=nsim)),nrow=nsim,byrow = F)
+# #   colnames(sampMarg) <- names(mod2b$marginals.fixed)
+# #   
+# #   ## get stratified estimates (trivial because each grouping has its own parameter)
+# #   outMargStrat <- expand.grid(urban=unique(dat_t$urban), admin1.char = unique(dat_t$admin1.char))
+# #   outMargStrat$admin1 <- as.numeric(str_remove(outMargStrat$admin1.char,'admin1_'))
+# #   outMargStrat <- dat_t %>% select(urban,admin1.char,admin1) %>% unique() %>% arrange(admin1.char,urban)
+# #   outMargStrat <- outMargStrat[order(outMargStrat$admin1),]
+# #   outMargStrat$strata <- as.numeric(I(outMargStrat$urban=='urban'))
+# #   outMargStrat$admin1.strata <- outMargStrat$admin1 + (1-outMargStrat$strata)*max(outMargStrat$admin1)
+# #   
+# #   AA <- sampMarg
+# #   outMargStrat$log.mean <- colMeans(AA)
+# #   outMargStrat$mean <- colMeans(exp(AA))
+# #   outMargStrat$median <- colMedians(exp(AA))
+# #   outMargStrat$variance <- colVars(exp(AA))
+# #   outMargStrat$lower <- apply(exp(AA),2,quantile,0.05)
+# #   outMargStrat$upper <- apply(exp(AA),2,quantile,0.95)
+# #   
+# #   ## get overall estimates
+# #   outMargOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
+# #   outMargOverall$admin1.char <- paste0('admin1_', outMargOverall$admin1)
+# #   
+# #   AA.wt <- matrix(NA,nrow(outMargOverall),ncol(sampMarg))
+# #   for(k in 1:max(dat_t$admin1)){
+# #     weights_t <- adm1_UR_weights_t[adm1_UR_weights_t$region==paste0('admin1_',k),]
+# #     AA.wt[,k] <- weights_t$urban*I(outMargOverall$admin1==k) # urban weight
+# #     AA.wt[,(k + max(dat_t$admin1))] <- weights_t$rural*I(outMargOverall$admin1==k) # rural weight
+# #   }
+# #   
+# #   AA <- sampMarg %*% t(AA.wt)
+# #   outMargOverall$log.mean <- colMeans(AA)
+# #   outMargOverall$mean <- colMeans(exp(AA))
+# #   outMargOverall$median <- colMedians(exp(AA))
+# #   outMargOverall$variance <- colVars(exp(AA))
+# #   outMargOverall$lower <- apply(exp(AA),2,quantile,0.05)
+# #   outMargOverall$upper <- apply(exp(AA),2,quantile,0.95)
+# #   
+# #   mod2b.outMargStrat <- outMargStrat
+# #   mod2b.outMargOverall <- outMargOverall
+# # }
 
 # mod3: urban (fixed) + admin2 (BYM2) ---------
 mod3 <- INLA::inla(Y ~ -1 + factor(strata) +
@@ -606,219 +273,49 @@ mod3 <- INLA::inla(Y ~ -1 + factor(strata) +
                    control.family = list(link = 'log'),
                    control.compute = list(return.marginals=T, 
                                           return.marginals.predictor=T,
-                                          config=T))
+                                          config=T,cpo=T))
 
-# sample from full posterior
-{
-  cs <- mod3$misc$configs$contents$tag
-  cs <- cs[cs != "Predictor"]
-  select <- list()
-  for (i in 1:length(cs)) {
-    select[[i]] <- 0
-    names(select)[i] <- cs[i]
-  }
-  
-  sampFull <- INLA::inla.posterior.sample(n = nsim, result = mod3, intern = TRUE, selection = select)
-  sampFull.draws <- matrix(NA,nsim,length(sampFull[[1]]$latent))
-  for(i in 1:nsim){
-    sampFull.draws[i,] <- sampFull[[i]]$latent
-  }
-  colnames(sampFull.draws) <- row.names(sampFull[[1]]$latent)
-  #which columns pertain to which factor
-  admin2.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin2'))
-  strata.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'strata'))
-  
-  ## get admin2 stratified estimates
-  outFull <- expand.grid(urban = unique(dat_t$urban),admin2.char = unique(dat_t$admin2.char))
-  outFull$admin2 <- as.numeric(str_remove(outFull$admin2.char,'admin2_'))
-  outFull <- outFull[order(outFull$admin2),]
-  # binary matrix which specifies which columns to index for a given combination of factors
-  AA.loc <- matrix(0,nrow(outFull),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin2)){
-    AA.loc[,admin2.cols[k]] <- I(outFull$admin2==k)
-  }
-  AA.loc[,strata.cols[2]] <- I(outFull$urban=='urban')
-  AA.loc[,strata.cols[1]] <- 1 - I(outFull$urban=='urban')
-  
-  AA <- sampFull.draws %*% t(AA.loc)
-  
-  outFull$log.mean <- colMeans(AA)
-  outFull$mean <- colMeans(exp(AA))
-  outFull$median <- colMedians(exp(AA))
-  outFull$variance <- colVars(exp(AA))
-  outFull$lower <- apply(exp(AA),2,quantile,0.05)
-  outFull$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get admin 1 stratified estimates
-  outFullStrat <- expand.grid(urban = unique(dat_t$urban),admin1.char = unique(dat_t$admin1.char))
-  outFullStrat$admin1 <- as.numeric(str_remove(outFullStrat$admin1.char,'admin1_'))
-  outFullStrat <- outFullStrat[order(outFullStrat$admin1),]
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullStrat),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include weights for admin2s
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in adm2_weights_t$region){
-      AA.wt[,admin2.cols[as.numeric(str_remove(m,'admin2_'))]] <- adm2_weights_t[adm2_weights_t$region==m,]$proportion*I(outFullStrat$admin1==k)
-    }
-  }
-  AA.wt[,strata.cols[2]] <- I(outFullStrat$urban=='urban')
-  AA.wt[,strata.cols[1]] <- 1 - I(outFullStrat$urban=='urban')
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullStrat$log.mean <- colMeans(AA)
-  outFullStrat$mean <- colMeans(exp(AA))
-  outFullStrat$median <- colMedians(exp(AA))
-  outFullStrat$variance <- colVars(exp(AA))
-  outFullStrat$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullStrat$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get admin 1 overall estimates
-  outFullOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
-  outFullOverall$admin1.char <- paste0('admin1_', outFullOverall$admin1)
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullOverall),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include weights for admin2s
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in adm2_weights_t$region){
-      AA.wt[,admin2.cols[as.numeric(str_remove(m,'admin2_'))]] <- adm2_weights_t[adm2_weights_t$region==m,]$proportion*I(outFullOverall$admin1==k)
-    }
-  }
-  #include weights for urban/rural
-  AA.wt[,strata.cols[2]] <- adm1_UR_weights_t$urban
-  AA.wt[,strata.cols[1]] <- adm1_UR_weights_t$rural
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullOverall$log.mean <- colMeans(AA)
-  outFullOverall$mean <- colMeans(exp(AA))
-  outFullOverall$median <- colMedians(exp(AA))
-  outFullOverall$variance <- colVars(exp(AA))
-  outFullOverall$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullOverall$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get national estimates
-  AA.wt <- rep(0,ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin2)){
-    #include weights for admin2s
-    AA.wt[admin2.cols[k]] <- adm2_weights[adm2_weights$years==ref_year & adm2_weights$region==paste0('admin2_',k),]$proportion
-  }
-  #include weights for urban/rural
-  AA.wt[strata.cols[2]] <- sum(adm1_UR_weights_t$urban*adm1_weights_t$proportion)
-  AA.wt[strata.cols[1]] <- sum(adm1_UR_weights_t$rural*adm1_weights_t$proportion)
-  
-  AA <- sampFull.draws %*% AA.wt
-  outFullNatl <- data.frame(mean = colMeans(exp(AA)))
-  outFullNatl$log.mean <- colMeans(AA)
-  outFullNatl$median <- colMedians(exp(AA))
-  outFullNatl$variance <- colVars(exp(AA))
-  outFullNatl$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullNatl$upper <- apply(exp(AA),2,quantile,0.95)
-  
-}
-mod3.adm2.strat <- outFull
-mod3.adm1.strat <- outFullStrat
-mod3.adm1 <- outFullOverall
-mod3.natl <- outFullNatl
+# sample from full posterior 
+mod3.est <- getAggregated(mod3,dat_t,
+                           admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t,
+                           admin2.weights = adm2_weights_t,admin2.to.admin1.weights = adm2_to_adm1_weights_t)
+mod3.adm1 <- mod3.est$adm1.est
+mod3.natl <- mod3.est$natl.est
 
-# don't think there is a logical way to sample marginal without an admin1 fixed effect
-
-# mod4: urban(fixed) + admin2 (fixed) -----
-mod4 <- INLA::inla(Y ~ factor(strata) + factor(admin2) -1,
-                   data=dat_t, family='nbinomial', E=total,
-                   control.predictor = list(compute = T, link = 1),
-                   control.family = list(link = 'log'),
-                   control.compute = list(config=T))
-
-# sample from full posterior
-{
-  cs <- mod4$misc$configs$contents$tag
-  cs <- cs[cs != "Predictor"]
-  select <- list()
-  for (i in 1:length(cs)) {
-    select[[i]] <- 0
-    names(select)[i] <- cs[i]
-  }
-  
-  sampFull <- INLA::inla.posterior.sample(n = nsim, result = mod4, intern = TRUE, selection = select)
-  sampFull.draws <- matrix(NA,nsim,length(sampFull[[1]]$latent))
-  for(i in 1:nsim){
-    sampFull.draws[i,] <- sampFull[[i]]$latent
-  }
-  colnames(sampFull.draws) <- row.names(sampFull[[1]]$latent)
-  #which columns pertain to which factor
-  admin2.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'admin2'))
-  strata.cols <- which(str_detect(row.names(sampFull[[1]]$latent),'strata'))
-  
-  ## get admin 1 overall estimates
-  outFullOverall <- data.frame(admin1 = 1:max(dat_t$admin1))
-  outFullOverall$admin1.char <- paste0('admin1_', outFullOverall$admin1)
-  # matrix which specifies which columns to include and how to weight them
-  AA.wt <- matrix(0,nrow(outFullOverall),ncol(sampFull.draws))
-  for(k in 1:max(dat_t$admin1)){
-    #include weights for admin2s
-    adm2_weights_t <- adm2_to_adm1_weights_t[adm2_to_adm1_weights_t$admin1.char==paste0('admin1_',k),]
-    for(m in adm2_weights_t$region){
-      if(m!='admin2_1'){
-        AA.wt[,admin2.cols[as.numeric(str_remove(m,'admin2_'))-1]] <- adm2_weights_t[adm2_weights_t$region==m,]$proportion*I(outFullOverall$admin1==k)
-      }
-    }
-  }
-  #include weights for urban/rural
-  AA.wt[,strata.cols[2]] <- adm1_UR_weights_t$urban
-  AA.wt[,strata.cols[1]] <- adm1_UR_weights_t$rural
-  
-  AA <- sampFull.draws %*% t(AA.wt)
-  outFullOverall$log.mean <- colMeans(AA)
-  outFullOverall$mean <- colMeans(exp(AA))
-  outFullOverall$median <- colMedians(exp(AA))
-  outFullOverall$variance <- colVars(exp(AA))
-  outFullOverall$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullOverall$upper <- apply(exp(AA),2,quantile,0.95)
-  
-  ## get national estimates
-  AA.wt <- rep(0,ncol(sampFull.draws))
-  for(k in 2:max(dat_t$admin2)){
-    #include weights for admin2s
-    AA.wt[admin2.cols[k-1]] <- adm2_weights[adm2_weights$years==ref_year & adm2_weights$region==paste0('admin2_',k),]$proportion
-  }
-  #include weights for urban/rural
-  AA.wt[strata.cols[2]] <- sum(adm1_UR_weights_t$urban*adm1_weights_t$proportion)
-  AA.wt[strata.cols[1]] <- sum(adm1_UR_weights_t$rural*adm1_weights_t$proportion)
-  
-  AA <- sampFull.draws %*% AA.wt
-  outFullNatl <- data.frame(mean = colMeans(exp(AA)))
-  outFullNatl$log.mean <- colMeans(AA)
-  outFullNatl$median <- colMedians(exp(AA))
-  outFullNatl$variance <- colVars(exp(AA))
-  outFullNatl$lower <- apply(exp(AA),2,quantile,0.05)
-  outFullNatl$upper <- apply(exp(AA),2,quantile,0.95)
-  
-}
-
-mod4.adm1 <- outFullOverall
-mod4.natl <- outFullNatl
+# # mod4: urban(fixed) + admin2 (fixed) -----
+# mod4 <- INLA::inla(Y ~ factor(strata) + factor(admin2) -1,
+#                    data=dat_t, family='nbinomial', E=total,
+#                    control.predictor = list(compute = T, link = 1),
+#                    control.family = list(link = 'log'),
+#                    control.compute = list(config=T,cpo=T))
+# 
+# # sample from full posterior
+# mod4.est <- getAggregated(mod4,dat_t,
+#                           admin1.weights = adm1_weights_t,admin1.UR.weights = adm1_UR_weights_t,
+#                           admin2.weights = adm2_weights_t,admin2.to.admin1.weights = adm2_to_adm1_weights_t)
+# mod4.adm1 <- mod4.est$adm1.est
+# mod4.natl <- mod4.est$natl.est
 
 # compare non-temporal models ----
 direct.adm1$mod <- direct.natl$mod <- 'Direct'
 sd.adm1$mod <- 'SD'
-mod1.adm1.strat$mod <- mod1.adm1$mod <- mod1.natl$mod <- 'Urban + Admin1'
-mod1b.adm1.strat$mod <- mod1b.adm1$mod <- mod1b.natl$mod <- 'Urban + Admin1 + Admin2 (nested BYM2)'
+mod1.adm1$mod <- mod1.natl$mod <- 'Urban + Admin1'
+mod1b.adm1$mod <- mod1b.natl$mod <- 'Urban + Admin1 + Admin2 (nested BYM2)'
 mod2.adm1$mod <- mod2.natl$mod <- 'Urban*Admin1'
-mod2b.adm1.strat$mod <- mod2b.adm1$mod <- mod2b.natl$mod <- 'Urban*Admin1 + Admin2 (nested BYM2)'
-mod3.adm2.strat$mod <- mod3.adm1.strat$mod <- mod3.adm1$mod <- mod3.natl$mod <- 'Urban + Admin2 (BYM2)'
-mod4.adm1$mod <- mod4.natl$mod <- 'Urban + Admin2 (fixed)'
+#mod2b.adm1$mod <- mod2b.natl$mod <- 'Urban*Admin1 + Admin2 (nested BYM2)'
+mod3.adm1$mod <- mod3.natl$mod <- 'Urban + Admin2 (BYM2)'
+#mod4.adm1$mod <- mod4.natl$mod <- 'Urban + Admin2 (fixed)'
 
 # compare Admin1 estimates
 bind_vars <- c('admin1.char','mean','median','lower','upper','mod')
 adm1.ests_t <- rbind(direct.adm1[,bind_vars],
-                    #sd.adm1[,bind_vars],
+                    sd.adm1[,bind_vars],
                     mod1.adm1[,bind_vars],
                     mod1b.adm1[,bind_vars],
                     mod2.adm1[,bind_vars],
-                    mod2b.adm1[,bind_vars],
-                    mod3.adm1[,bind_vars],
-                    mod4.adm1[,bind_vars])
+                    #mod2b.adm1[,bind_vars],
+                    mod3.adm1[,bind_vars])
+                   # mod4.adm1[,bind_vars])
 adm1.ests_t <- adm1.ests_t %>% mutate(level = ifelse(mod %in% c('Direct','Urban + Admin1'),'admin1','admin2'))
 
 # adm1.ests_t %>% ggplot(aes(x=admin1.char,y=mean,group=mod,color=mod)) + geom_point(aes(pch=level),size=3) + 
@@ -830,9 +327,9 @@ natl.ests_t <- rbind(direct.natl[,bind_vars],
                      mod1.natl[,bind_vars],
                      mod1b.natl[,bind_vars],
                      mod2.natl[,bind_vars],
-                     mod2b.natl[,bind_vars],
-                     mod3.natl[,bind_vars],
-                     mod4.natl[,bind_vars])
+                    # mod2b.natl[,bind_vars],
+                     mod3.natl[,bind_vars])
+                     #mod4.natl[,bind_vars])
 natl.ests_t <- natl.ests_t %>% mutate(level = ifelse(mod =='Direct','national', ifelse(mod =='Urban + Admin1','admin1','admin2')))
 natl.ests_t$admin1.char <- 'National'
 # natl.ests_t %>% ggplot(aes(x=NA,y=mean,group=mod,color=mod)) + geom_point(aes(pch=level),size=3) + 
@@ -843,33 +340,63 @@ all.ests_t$period <- paste0(beg.years[period],'-',end.years[period])
 all.ests_t$country <- country_t
 
 all.ests <- rbind(all.ests,all.ests_t)
+
+#record CPO
+mod1 <- inla.cpo(mod1)
+mod1b <- inla.cpo(mod1b)
+mod2 <- try(inla.cpo(mod2))
+#mod2b <- try(inla.cpo(mod2b))
+mod3 <- try(inla.cpo(mod3))
+#mod4 <- try(inla.cpo(mod4))
+cpo.res <- rbind(cpo.res,
+                 c(-mean(log(mod1$cpo$cpo)),
+                   -mean(log(mod1b$cpo$cpo)),
+                   -mean(log(mod2$cpo$cpo)),
+                  # -mean(log(mod2b$cpo$cpo)),
+                   -mean(log(mod3$cpo$cpo))))
+                   #-mean(log(mod4$cpo$cpo))))
 }
+cpo.dat <- data.frame(cpo.res)
+colnames(cpo.dat) <- c('Urban + Admin1','Urban + Admin1 + Admin2 (nested BYM2)','Urban*Admin1',
+                      # 'Urban*Admin1 + Admin2 (nested BYM2)',
+                       'Urban + Admin2 (BYM2)')
+                   #    'Urban + Admin2 (fixed)')
+model.names <-  c('Urban + Admin1','Urban + Admin1 + Admin2 (nested BYM2)','Urban*Admin1',
+                  #'Urban*Admin1 + Admin2 (nested BYM2)',
+                  'Urban + Admin2 (BYM2)')
+                #  'Urban + Admin2 (fixed)')
+cpo.dat$period <- paste0(beg.years,'-',end.years)
+cpo.dat <- cpo.dat  %>% pivot_longer(cols = model.names,values_to = 'cpo',names_to = 'model')
 
+pdf(paste0("/Users/alanamcgovern/Desktop/Research/New Benchmarking/Nested Model Approach/",country_t," Model Comparison.pdf"))
 
-pdf("/Users/alanamcgovern/Desktop/Research/New Benchmarking/Nested Model Approach/Guinea Model Comparison.pdf")
-
-g <- all.ests %>% ggplot(aes(x=admin1.char,y=median,group=mod,color=mod)) + 
+g <- all.ests %>% ggplot(aes(x=admin1.char,y=median,group=mod,color=mod)) +
   geom_jitter(aes(pch=mod,alpha=mod),size=3,width=0.2) +
-  facet_wrap(~period) + scale_color_discrete(name='Model') + 
-  scale_shape_manual(name='Model', values = c(8,8,17,17,17,8,17)) + 
-  scale_alpha_manual(name = 'Model',values = c(1,1,0.6,0.6,0.6,1,0.6)) +
-  ggtitle('Guinea, 2018 survey') + xlab('Admin 1') + ylab('Median NMR') +
+  facet_wrap(~period) + scale_color_discrete(name='Model') +
+  scale_shape_manual(name='Model', values = c(8,8,8,17,17,17,8,17)) +
+  scale_alpha_manual(name = 'Model',values = c(1,1,1,0.6,0.6,0.6,1,0.6)) +
+  ggtitle(paste0(country_t,', ',survey_year,' survey')) + xlab('Admin 1') + ylab('Median NMR') +
   theme(legend.position = 'bottom',legend.box = 'vertical',legend.margin = margin(),
-        axis.text.x = element_text(angle = 45,vjust = 0.75)) + 
+        axis.text.x = element_text(angle = 45,vjust = 0.75)) +
   guides(color=guide_legend(nrow=3,byrow=T,title.position = 'top',title.hjust = 0.5))
 print(g)
 
-g <- all.ests %>% filter(!(mod %in% c('Urban*Admin1','Urban*Admin1 + Admin2 (nested BYM2)','Urban + Admin2 (BYM2)'))) %>% 
-  ggplot(aes(x=admin1.char,y=median,group=mod,color=mod)) + 
-  geom_jitter(aes(pch=mod,alpha=mod),size=3,width=0.2) +
-  facet_wrap(~period) + scale_color_discrete(name='Model') + 
-  scale_shape_manual(name='Model', values = c(8,8,17,17,17,8,17)) + 
-  scale_alpha_manual(name = 'Model',values = c(1,1,0.6,0.6,0.6,1,0.6)) +
-  ggtitle('Guinea, 2018 survey') + xlab('Admin 1') + ylab('Median NMR') +
+# g <- all.ests %>% filter(!(mod %in% c('Urban + Admin2 (fixed)'))) %>%
+#   ggplot(aes(x=admin1.char,y=median,group=mod,color=mod)) +
+#   geom_jitter(aes(pch=mod,alpha=mod),size=3,width=0.2) +
+#   facet_wrap(~period) + scale_color_discrete(name='Model') +
+#   scale_shape_manual(name='Model', values = c(8,8,8,17,17,8,17)) +
+#   scale_alpha_manual(name = 'Model',values = c(1,1,1,0.6,0.6,1,0.6)) +
+#   ggtitle(paste0(country_t,', ',survey_year,' survey')) + xlab('Admin 1') + ylab('Median NMR') +
+#   theme(legend.position = 'bottom',legend.box = 'vertical',legend.margin = margin(),
+#         axis.text.x = element_text(angle = 45,vjust = 0.5)) +
+#   guides(color=guide_legend(nrow=3,byrow=T,title.position = 'top',title.hjust = 0.5))
+# print(g)
+
+d <- cpo.dat %>% ggplot(aes(x=period,y=cpo,group=model,color=model)) + geom_jitter(size=3,alpha=0.7,width=0.2) +
   theme(legend.position = 'bottom',legend.box = 'vertical',legend.margin = margin(),
-        axis.text.x = element_text(angle = 45,vjust = 0.75)) + 
-  guides(color=guide_legend(nrow=3,byrow=T,title.position = 'top',title.hjust = 0.5))
-print(g)
+        axis.text.x = element_text(angle = 45,vjust = 0.5)) + ylab('-mean(log(cpo))')
+print(d)
 
 dev.off()
 
@@ -1070,3 +597,4 @@ pdf('Nested Model Approach/Malawi 2010 survey=2015 230814.pdf')
 
 }
 dev.off()
+
