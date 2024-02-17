@@ -98,7 +98,8 @@ lapply(results2[[1]],colMeans)
 
 
 #Alg 2.3a: MCMC to get P(r,phi,tau|Y) (IID spatial effect) + Alg 2.4a: MCMC to get P(r, phi, tau|Y,Y+) (IID spatial effect) -------
-## define ground truth -------
+## define ground truth 
+{
 n_areas <- 40
 n_clusters <- rep(10,n_areas)
 #spatial relationship
@@ -124,7 +125,9 @@ tau <- rgamma(1,1,0.5)
 b <- Rfast::rmvnorm(1,rep(0,n_areas),diag(1/tau,n_areas))
 
 
-## run simulations -------
+}
+## run simulations 
+{
 nsims <- 100
 a.res.stan3 <- a.res.stan4 <- a.res.inla <- a.res.eb <- list()
 b.res.stan3 <- b.res.stan4 <- list()
@@ -192,7 +195,10 @@ for(i in 1:nsims){
   r.res.stan4[[i]] <- fit4$r
   tau.res.stan4[[i]] <- fit4$tau
 }
-## organize results -------
+}
+## organize results 
+{
+-------
 # stan: for each parameter of interest we get a list whose elements are sublists (one for each iteration)
 # inla: for each parameter of interest we get a list whose elements are the parameter estimates for each iteration
 results <- (list(stan3_a = a.res.stan3, stan3_b = b.res.stan3, stan3_r = r.res.stan3,
@@ -229,15 +235,19 @@ summary_results <- list(res_a=rbind(data.frame(a=unlist(lapply(results$stan3_a,m
 
 summary_results$res_r$area <- as.numeric(str_remove(summary_results$res_r$area,'X'))
 
-## save results -------
+}
+## save results 
+{
+-------
  alg_res <- list(truth=list(a=a,tau=tau),results=summary_results)
  save(alg_res,file='alg_res230615_random b N=5000x15.rda')
  
  # alg_res <- list(truth=list(a=a,b=b,tau=tau),results=summary_results)
  # save(alg_res,file='alg_res230615_fixed b N=5000x15.rda')
 
-## visualize results -------
-
+ }
+## visualize results
+{
 
 # pdf(file='Alg Results 230615 fixed b N=5000x15.pdf')
 # {
@@ -274,9 +284,11 @@ pdf(file='Alg Results 230615 random b N=5000x15.pdf')
 dev.off()
 
 
+}
 #Alg 2.3: MCMC to get P(r,phi,tau|Y) (BYM2 spatial effect) + Alg 2.4: MCMC to get P(r, phi, tau|Y,Y+) (BYM2 spatial effect) -------------
 
-## define ground truth ----
+## define ground truth 
+{
 n_areas <- 75
 n_clusters <- rep(10,n_areas)
 #spatial relationship
@@ -302,7 +314,9 @@ tau_b <- exp(log_tau_b)
 #draw spatial variation from beta hyperprior
 phi <- rbeta(1,2,3)
 
-## arguments for BYM2 -----
+}
+## arguments for BYM2 
+{
 ## reparametrized matrix for BYM2 parameters
 Q_scaled <- inla.scale.model(Q, constr=list(A=t(eigen(Q)$vectors[,eigen(Q)$values<1e-10]), e=rep(0,sum(eigen(Q)$values<1e-10))))
 Q_scaled_inv <- INLA:::inla.ginv(as.matrix(Q_scaled))
@@ -338,7 +352,9 @@ prior_diff <- function(lambda,Q_scaled_inv,gamma_til){
 lambda_opt <- optim(1,prior_diff,Q_scaled_inv=Q_scaled_inv,gamma_til=gamma_til,method = 'Brent',lower = 0,upper=10)$par
 
 
-## run simulations ----
+}
+## run simulations 
+{
 nsims <- 100
 a.res.stan3 <- a.res.stan4 <- a.res.inla <-a.res.inla.pc <- a.res.eb <- list()
 b.res.stan3 <- b.res.stan4 <- list()
@@ -443,7 +459,9 @@ tau.res.stan3 <- phi.res.stan3 <- tau.res.stan4 <- phi.res.stan4 <- tau.res.inla
     
   }
 
-## organize results ----
+}
+## organize results 
+{
 # stan: for each parameter of interest we get a list whose elements are sublists (one for each iteration)
 # inla: for each parameter of interest we get a list whose elements are the parameter estimates for each iteration
 results <- (list(
@@ -488,14 +506,17 @@ summary_results <- list(res_a=rbind(data.frame(a=unlist(lapply(results$stan3_a,m
                                 #   data.frame(phi=unlist(results$eb_phi),model='eb'),
                                 #   data.frame(phi=unlist(results$inla_phi),model='inla'),
                                    data.frame(phi=unlist(results$inla_pc_phi),model='inla.pc')))
-## save results ----
+}
+## save results 
+{
    prior_info <- list(#inla.tau = 'PC(1,0.01)', inla.phi='Beta(2,3)', 
                       stan.tau = 'PC(1,0.01)', stan.phi = 'PC(0.5,2/3)')
    alg_res <- list(truth=list(a=a,b=b,tau_b=tau_b,phi=phi),results=summary_results,prior_info=prior_info)
    save(alg_res,file='bym2_res230711 fixed b N=5000x75.rda')
 
-## visualize results ----
-
+   }
+## visualize results 
+{
 # 
  pdf(file='BYM2 Results 230711 fixed b N=5000x75.pdf')
 {
@@ -528,41 +549,56 @@ print(g)
 dev.off()
 
 #Alg 3.1: P(Y,r,phi,tau|Z) and P(Y,r,phi,tau|Z,Y+)
-## define ground truth ----
-n_areas <- 40 #numbers of areas
-n_clusters <- rep(10,n_areas) #number of clusters in each area
-n_births <- 500 #average number of births per cluster
-n_births_samp <- rep(500,n_areas) #number of births sampled from each area
-
-#spatial relationship
-Q <- matrix(NA,n_areas,n_areas)
-for(i in 1:(n_areas-1)){
-  Q[i,(i+1):n_areas] <- -rbinom(n_areas-i,1,0.25)
-  if(sum(Q[i,(i+1):n_areas])==0){
-    Q[i,i+1] <- -1
+}
+#Alg 3.1 -----
+## define ground truth 
+{
+  ## this section is calibrated to be relatively similar to Sierra Leone 2019 survey, in terms of sample sizes
+  n_admin2 <- 20
+  n_clusters_urban <- rnegbin(n_admin2,200,5) #number of urban clusters in each admin2 area
+  n_clusters_rural <- rnegbin(n_admin2,300,5) #number of rural clusters in each admin2 area
+  n_births_urban <- 75 #average number of births per urban cluster (0.3*number of households) 
+  n_births_rural <-  100 #average number of births per rural cluster (0.45*number of households) 
+  n_clusters_urban_samp <-  round(0.075*n_clusters_urban) #number of urban clusters sampled in each admin2 area
+  n_clusters_rural_samp <-  round(0.05*n_clusters_rural) #number of rural clusters sampled in each admin2 area
+  n_births_urban_samp <- 20 # average number of births sampled from each urban cluster 
+  n_births_rural_samp <- 30 # average number of births sampled from each rural cluster 
+  
+  #spatial relationship
+  Q <- matrix(NA,n_admin2,n_admin2)
+  for(i in 1:(n_admin2-1)){
+    Q[i,(i+1):n_admin2] <- -rbinom(n_admin2-i,1,0.25)
+    if(sum(Q[i,(i+1):n_admin2])==0){
+      Q[i,i+1] <- -1
+    }
+    Q[(i+1):n_admin2,i] <- Q[i,(i+1):n_admin2]
   }
-  Q[(i+1):n_areas,i] <- Q[i,(i+1):n_areas]
+  for(i in 1:n_admin2){
+    Q[i,i] <- -sum(Q[i,],na.rm = T)
+  }
+  
+  # intercept (fixed effect) 
+  alphaU <- rnorm(1,-3.5,0.25)
+  alphaR <- rnorm(1,-3.2,0.25)
+  
+  # draw hyperparameters
+  tau_b <- rgamma(1,10,0.25)
+  
+  #draw spatial variation from beta hyperprior
+  phi <- rbeta(1,2,3)
+  
+  # draw overdispersion parameter
+  d <- rlnorm(1,0,0.25)
+ 
 }
-for(i in 1:n_areas){
-  Q[i,i] <- -sum(Q[i,],na.rm = T)
-}
 
-#intercept (fixed effect) 
-a <- rnorm(1,-6,0.25)
-
-#draw spatial precision from hyperprior
-log_tau_b <- rnorm(1,3,0.5)
-tau_b <- exp(log_tau_b)
-
-#draw spatial variation from beta hyperprior
-phi <- rbeta(1,2,3)
-
-## arguments for BYM2 -----
+## arguments for BYM2 
+{
 ## reparametrized matrix for BYM2 parameters
 Q_scaled <- inla.scale.model(Q, constr=list(A=t(eigen(Q)$vectors[,eigen(Q)$values<1e-10]), e=rep(0,sum(eigen(Q)$values<1e-10))))
 Q_scaled_inv <- INLA:::inla.ginv(as.matrix(Q_scaled))
-Var_b <- (1/tau_b)*(diag((1-phi),n_areas) + phi*Q_scaled_inv)
-b <- Rfast::rmvnorm(1,rep(0,n_areas),Var_b)
+Var_b <- (1/tau_b)*(diag((1-phi),n_admin2) + phi*Q_scaled_inv)
+b <- Rfast::rmvnorm(1,rep(0,n_admin2),Var_b)
 
 ## find lambda to properly calibrate PC prior on phi
 alpha <- 2/3
@@ -592,75 +628,88 @@ prior_diff <- function(lambda,Q_scaled_inv,gamma_til){
 
 lambda_opt <- optim(1,prior_diff,Q_scaled_inv=Q_scaled_inv,gamma_til=gamma_til,method = 'Brent',lower = 0,upper=10)$par
 
-## run simulations ----
-nsims <- 100
-a.res.stan1 <- a.res.stan2 <- a.res.inla.pc <- list()
-b.res.stan1 <- b.res.stan2 <- list()
-r.res.stan1 <- r.res.stan2 <- r.res.inla.pc <- list()
-tau.res.stan1 <- tau.res.stan2 <- tau.res.inla.pc <- list()
-phi.res.stan1 <- phi.res.stan2 <- phi.res.inla.pc <- list()
-for(i in 1:nsims){
-  message(paste0('Starting simulation ',i))
-  datbym2.info <- simdat_bym2sp(n_areas=n_areas,n_clusters=n_clusters,n_births=n_births,
-                                a=a,Var_b=Var_b,b=b)
-  obs_dat <- get_srs(datbym2.info$dat,n_births_samp)
-  
-  # run MCMC Alg 3.1
-  list_dat1 <- list(lenA=n_areas,
-                    N=obs_dat$N_tot,
-                    n=obs_dat$N_obs,
-                    Z=obs_dat$Z,
-                    Q_scaled_inv = Q_scaled_inv,
-                    eigen = gamma_til,
-                    lambda = lambda_opt)
+}
 
-  fit1.out <- stan(file = 'Alg3.1.stan', data = list_dat1)
-  fit1 <- rstan::extract(fit1.out)
+## generate data 
+{
+  admin_key <- data.frame(A2=1:n_admin2)
+  all_dat <- data.frame(
+    # (true) number of births in each cluster
+    N = round(c(rnorm(sum(n_clusters_urban),n_births_urban,10),rnorm(sum(n_clusters_rural),n_births_rural,12))),
+    # urban or rural strata (U=1 if urban, otherwise 0)
+    U = c(rep(1,sum(n_clusters_urban)), rep(0,sum(n_clusters_rural))),
+    # admin area of each cluster
+    A2 = c(unlist(sapply(1:n_admin2,function(i){rep(i,n_clusters_urban[i])})),unlist(sapply(1:n_admin2,function(i){rep(i,n_clusters_rural[i])}))))
+  all_dat <- merge(admin_key,all_dat)
+  all_dat$cluster <- 1:nrow(all_dat)
+  all_dat$Y <- sapply(1:nrow(all_dat),function(i){
+    rnbinom(1, size = 1/d*all_dat$N[i]*exp(alphaU*all_dat$U[i] + alphaR*(1-all_dat$U[i]) + b[all_dat$A2[i]] + rnorm(1,0,0.05)), prob=1/(1+d))})
+  
+  ### sample clusters
+  obs_dat <- NULL
+  for(area in 1:n_admin2){
+    # randomly select clusters from urban strata based on size of cluster
+    obs_dat <- rbind(obs_dat,all_dat[all_dat$A2==area & all_dat$U==1,][sample(1:n_clusters_urban[area],n_clusters_urban_samp[area],prob = all_dat[all_dat$U==1 & all_dat$A2==area,]$N),],
+                     # randomly select cluster from rural strata  based on size of cluster
+                     all_dat[all_dat$A2==area & all_dat$U==0,][sample(1:n_clusters_rural[area],n_clusters_rural_samp[area],prob = all_dat[all_dat$U==0& all_dat$A2==area,]$N),])
+  }
+  
+  # sample births
+  obs_dat$n <- obs_dat$Z <- NA
+  obs_dat[obs_dat$U==1,]$n <- round(min(rnorm(sum(obs_dat$U),n_births_urban_samp,n_births_urban_samp/10),obs_dat[obs_dat$U==1,]$N))
+  obs_dat[obs_dat$U==0,]$n <- round(min(rnorm(sum(1-obs_dat$U),n_births_rural_samp,n_births_rural_samp/10),obs_dat[obs_dat$U==0,]$N))
+  for(i in 1:nrow(obs_dat)){
+    obs_dat$Z[i] <- sum(sample(c(rep(1,obs_dat$Y[i]),rep(0,(obs_dat$N[i]-obs_dat$Y[i]))), obs_dat$n[i]))
+  }
+  
+  # assign sampling weights
+  #births in strata/(# cluster sampled * #births sampled in cluster)
+  pop_dat <- all_dat %>% group_by(A2,U) %>% summarise(N=sum(N))
+  pop_dat$num_clust_samp <- pop_dat$num_births_samp <- NA
+  pop_dat$num_clust_samp[pop_dat$U==0] <- n_clusters_rural_samp
+  pop_dat$num_clust_samp[pop_dat$U==1] <- n_clusters_urban_samp
+  pop_dat$num_births_samp[pop_dat$U==0] <- n_births_rural_samp
+  pop_dat$num_births_samp[pop_dat$U==1] <- n_births_urban_samp
+  pop_dat$wt <- pop_dat$N/(pop_dat$num_births_samp*pop_dat$num_clust_samp)
+  pop_dat$wt <- pop_dat$wt/100
+  pop_dat <- pop_dat[order(pop_dat$U,pop_dat$A2),]
+  obs_dat <- merge(obs_dat,pop_dat[c('A2','U','wt')])
+  obs_dat <- obs_dat[order(obs_dat$A2),]
+  
+  data_list <- list(obs_dat = obs_dat, #observed data
+                    Yplus = sum(all_dat$Y), #ALL deaths in each admin1 area
+                    pop_strata_dat = pop_dat) # number of births per strata (admin2 x urban)
+  
+}
+## run model
+{
+
+# run MCMC Alg 3.1
+list_dat <- list(lenA=n_admin2,
+                 lenC=nrow(obs_dat),
+                 admin2_id = obs_dat$A2,
+                 urban_id = 2-obs_dat$U,
+                 Ntot = pop_dat$N, #MAKE SURE THIS IS IN CORRECT ORDER (ALL URBAN THEN ALL RURAL)
+                 N=obs_dat$N,
+                 Y=obs_dat$Y,
+                 Yplus=sum(all_dat$Y), 
+                 Q_scaled_inv=Q_scaled_inv,
+                 eigen = gamma_til,
+                 lambda = lambda_opt,
+                 alpha_prior_mu = c(-3.5,-3.2))
+  # init_fun <- function(){
+  #   list(mu=4.5, sigma2=0.05)}
+  # 
+  fit.out <- stan(file = 'Alg4.1.stan', data = list_dat)
+  fit <- rstan::extract(fit.out)
   
   ## save results
-  a.res.stan1[[i]] <- fit1$a
-  b.res.stan1[[i]] <- fit1$b
-  r.res.stan1[[i]] <- fit1$r
-  tau.res.stan1[[i]] <- fit1$tau
-  phi.res.stan1[[i]] <- fit1$phi
-  
-  # run MCMC Alg 3.2
-  list_dat2 <- list(lenA=n_areas,
-                    N=obs_dat$N_tot,
-                    n=obs_dat$N_obs,
-                    Z=obs_dat$Z,
-                    Yplus=sum(obs_dat$Y),
-                    Q_scaled_inv = Q_scaled_inv,
-                    eigen = gamma_til,
-                    lambda = lambda_opt)
-  
-  fit2.out <- stan(file = 'Alg3.2.stan', data = list_dat2)
-  fit2 <- rstan::extract(fit2.out)
-  
-  ## save results
-  a.res.stan2[[i]] <- fit2$a
-  b.res.stan2[[i]] <- fit2$b
-  r.res.stan2[[i]] <- fit2$r
-  tau.res.stan2[[i]] <- fit2$tau
-  phi.res.stan2[[i]] <- fit2$phi
-  
-  # check against INLA with all PC priors -- NEED TO CHANGE TO ACCOUNT FOR SURVEY DESIGN
-  hyper.inla.pc <- list(prec = list(prior = "pc.prec", param = c(1,0.01), initial=5),
-                        phi = list(prior= "pc", param=c(0.5,2/3)))
-  
-  inlafit.pc <- INLA::inla(Y ~ f(A, graph = abs(Q),
-                                 model = "bym2",
-                                 hyper = hyper.inla.pc,
-                                 scale.model = TRUE,
-                                 adjust.for.con.comp = TRUE),
-                           data=dat, family='poisson', E=N,
-                           control.predictor = list(compute = FALSE, link = 1))
-  
-  # #some INLA results
-  a.res.inla.pc[[i]] <- inlafit.pc$summary.fixed[,1]
-  r.res.inla.pc[[i]] <- unique(inlafit.pc$summary.fitted.values[,1])
-  tau.res.inla.pc[[i]] <- inlafit.pc$summary.hyperpar[1,1]
-  phi.res.inla.pc[[i]] <- inlafit.pc$summary.hyperpar[2,1]
+  alpha.res.stan <- fit$alpha
+  b.res.stan <- fit$b
+  r.res.stan <- fit$r
+  logd.res.stan <- fit$log_d
+  tau.res.stan <- fit$tau
+  phi.res.stan <- fit$phi
   
 }
 
