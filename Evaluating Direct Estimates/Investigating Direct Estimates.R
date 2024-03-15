@@ -3,6 +3,8 @@ library(SUMMER)
 library(tidyverse)
 library(ggpubr)
 library(Rfast)
+source('getAggregated.R')
+inla.setOption(inla.timeout = 10)
 
 
 out <- failure.summary <- NULL
@@ -113,7 +115,8 @@ for(country_t in countries){
         INLA::inla(died ~ factor(urban) + factor(admin1) -1,
                    data=simdat, family='nbinomial', E=total,
                    control.predictor = list(compute = T, link = 1),
-                   control.family = list(link = 'log'),
+                   control.family = list(control.link = list(model = 'log'),
+                                         hyper = list(theta = list(prior="pc.mgamma", param=0.25))),
                    control.compute = list(config=T))})
       ## stop model if its stalling
       if(is.character(inla.mod1[1])){
@@ -202,6 +205,7 @@ for(country_t in countries){
 }
 
 save(out,file = 'Evaluating Direct Estimates/Compare_Direct_Simulations_231121.rda')
+#load('Evaluating Direct Estimates/Compare_Direct_Simulations_231121.rda')
 
 pdf('Evaluating Direct Estimates/Compare_Direct_Simulations_Figures_231122.pdf')
 {
