@@ -112,8 +112,6 @@ log_target_5.3a_reg_params_4NUTS <- function(params,cons_params){
   alphaU <- params[4]
   alphaR <- params[5]
   b <- params[6:(length(params))]
-  #b <- params[6:(length(params)-length(cons_params$Y_sum_obs))]
-  #Yplus <- tail(params,length(cons_params$Y_sum_obs))
   
   # add Nr_obs to data
   cons_params$data_table[, ':='(Nr_obs=N*exp(U*alphaU + (1-U)*alphaR + b[A2]))]
@@ -123,11 +121,9 @@ log_target_5.3a_reg_params_4NUTS <- function(params,cons_params){
   Nr_sum <- (cons_params$pop_dt[, sum(N*exp(U*alphaU + (1-U)*alphaR + b[A2])), by=A1][order(A1)])$V1
   Nr_sum_obs <- (cons_params$data_table[, sum(Nr_obs),by=A1][order(A1)])$V1
   
-  out <- sum(cons_params$Yplus)*log(d/(1+d)) - sum(log(1+d)*Nr_sum/d) -
-    sum(lgamma(cons_params$Yplus - cons_params$Y_sum_obs + 1)) +
+  out <- sum(cons_params$Yplus)*log(d/(1+d)) - sum(log(1+d)*Nr_sum/d) +
     sum(lgamma(cons_params$Yplus - cons_params$Y_sum_obs + (1/d)*(Nr_sum-Nr_sum_obs))- lgamma((1/d)*(Nr_sum-Nr_sum_obs))) +
     sum(lgamma(cons_params$data_table$Y+1/d*cons_params$data_table$Nr_obs) - lgamma(1/d*cons_params$data_table$Nr_obs)) +
-    -0.5*sum(1/cons_params$logit_r_hat_var*(logitlink(cons_params$Yplus/N_sum) - cons_params$logit_r_hat)^2) +
     -0.5*tau*t(b)%*%W_inv%*%b -
     (alphaU-cons_params$mu_U)^2/(2*cons_params$sd_U^2) - (alphaR-cons_params$mu_R)^2/(2*cons_params$sd_R^2) -
     (log(d)-cons_params$mu_logd)^2/(2*cons_params$sd_logd^2) +
@@ -198,7 +194,7 @@ grad_log_target_5.3a_4NUTS <- function(params,cons_params){
 }
 
 log_target_cond_5.3_Yplus <- function(Yplus,pop_dat,Y,Nr_sum,Nr_obs,d,logit_r_hat,logit_r_hat_var){
-  term1 <- -1/(2*logit_r_hat_var)*(logitlink(Yplus/sum(pop_dat$N)) - logit_r_hat)^2 
+  term1 <- -1/(2*logit_r_hat_var)*(logitlink(Yplus/sum(pop_dat$N)) - logit_r_hat)^2
   term2 <- Yplus*log(d/(1+d)) #negative linear
   term3 <- lgamma(Yplus - sum(Y) + (1/d)*(Nr_sum-sum(Nr_obs))) - lgamma(Yplus - sum(Y) + 1)
   
@@ -2798,21 +2794,24 @@ mu_logd = 0
 sd_logd = 1
 eps_adapt = 100
 DA=F
+warmup1=0
 #hyperpriors  
 
 
 eps0 = 0.05
 M_init = solve(Sigma)
-logit_r_hat = dir.est$logit.est
-logit_r_hat_var = dir.est$var.est
-n_iter = 10
+logit_r_hat = admin1.dir$logit.est
+logit_r_hat_var = admin1.dir$var.est
+n_iter = 100
 chains=4
+warmup2=n_iter
 
 postsamp_Alg5.3a_NUTS_MCMC <- function(tau_init=40, phi_init=0.7, d_init = 1, alphaU_init = -3.5, alphaR_init= -3.2, #initial values
-                                       alpha_tau = 0.01,U_tau = 1,alpha_phi=0.5,beta_phi=1,mu_U = -3.5,sd_U = 3,mu_R = -3.2,sd_R = 3,mu_logd = 0,sd_logd = 1,#hyperpriors  
-                                       eps0, M_init,eps_adapt = 100, DA=F,  #tuning params for regression param,d, and Yplus proposals
-                                       logit_r_hat,logit_r_hat_var,data_list, 
-                                       n_iter, chains=4, warmup1=0,  #how long to wait before updating M
+                                       alpha_tau = 0.01, U_tau = 1, alpha_phi=0.5, beta_phi=1, mu_U = -3.5, sd_U = 3, mu_R = -3.5, sd_R = 3, mu_logd = 0, sd_logd = 1,#hyperpriors  
+                                       eps0, M_init, eps_adapt = 100, DA=F,  #tuning params for regression param,d, and Yplus proposals
+                                       logit_r_hat, logit_r_hat_var, data_list, 
+                                       n_iter, chains=4, 
+                                       warmup1=0,  #how long to wait before updating M
                                        warmup2=n_iter){ #when to stop updating M
   
   data <- data_list$obs_dat
@@ -2830,7 +2829,6 @@ postsamp_Alg5.3a_NUTS_MCMC <- function(tau_init=40, phi_init=0.7, d_init = 1, al
   n_admin2 <- nrow(data_list$Q_scaled_inv)
   
   cons_params <- list(pop_dt=pop_dt,Q_inv=data_list$Q_scaled_inv,
-                     logit_r_hat = logit_r_hat, logit_r_hat_var=logit_r_hat_var,
                      mu_logd=mu_logd,sd_logd=sd_logd,mu_U=mu_U,mu_R=mu_R,sd_U=sd_U,sd_R=sd_R,
                      alpha_tau=alpha_tau,U_tau=U_tau,alpha_phi=alpha_phi,beta_phi=beta_phi)
   
