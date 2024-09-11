@@ -1,0 +1,10 @@
+load("/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Simulation_Study/sim1_datasets.rda")
+load("/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Simulation_Study/DEPsim1_datasets.rda")
+load("/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Simulation_Study/sim_setting_1.rda")
+sd(sim_setting$b)
+1/sd(sim_setting$b)^2
+load("/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Simulation_Study/sim_setting_3.rda")
+1/sd(sim_setting$b)^2
+load("/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Simulation_Study/sim_setting_4.rda")
+1/sd(sim_setting$b)^2
+load("/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Simulation_Study/sim1_datasets.rda")
