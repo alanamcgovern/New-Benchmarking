@@ -2,11 +2,11 @@ library(sf)
 library(surveyPrev)
 library(SUMMER)
 library(tidyverse)
-library(data.table)
+#library(data.table)
 library(LaplacesDemon)
 library(VGAM)
 library(Matrix)
-library(Rfast)
+#library(Rfast)
 library(MASS)
 library(locfit)
 library(openxlsx)
@@ -108,6 +108,15 @@ admin1.dir <- admin1.dir %>% dplyr::select(region,mean,lower,upper,logit.est,var
 admin1.dir$admin1 <- as.numeric(sapply(1:nrow(admin1.dir),function(i){str_split(admin1.dir$admin1.char[i],'_')[[1]][2]}))
 admin1.dir <- admin1.dir[order(admin1.dir$admin1),]
 
+dir.est2 <- SUMMER::getDirect(data_for_direct, years='All',
+                             regionVar = "admin2.char",timeVar = "years", clusterVar =  "~cluster",
+                             Ntrials = "total",weightsVar = "v005")
+admin2.dir <- dir.est2[dir.est2$region!='All',]
+admin2.dir <- admin2.dir %>% dplyr::select(region,mean,lower,upper,logit.est,var.est) %>% rename(admin2_mean = mean, admin2_lower = lower,admin2_upper=upper,admin2.char = region)
+admin2.dir$admin2 <- as.numeric(sapply(1:nrow(admin2.dir),function(i){str_split(admin2.dir$admin2.char[i],'_')[[1]][2]}))
+admin2.dir <- admin2.dir[order(admin2.dir$admin2),]
+
+
 # input strata level DHS survey info ----
 dhs_dat <- data.frame(admin1 = rep(sort(unique(admin.key$admin1)),each=2),U = rep(c(1,0),max(admin.key$admin1)))
 dhs_dat <- left_join(dhs_dat,unique.array(admin.key[,c('admin1','admin1.char','admin1.name')])) %>% rename(A1=admin1)
@@ -140,7 +149,7 @@ for(i in 1:nrow(frame.info)){
 
 # organize population and survey data for algorithm ----
 alg_dat <- nmr.dat %>% mutate(U=ifelse(urban=='urban',1,0)) %>% 
-  dplyr::select(cluster,total,Y,U,admin1,admin1.char,admin1.name,admin2,admin2.char,admin2.name) %>% 
+  dplyr::select(cluster,total,Y,U,v005,admin1,admin1.char,admin1.name,admin2,admin2.char,admin2.name) %>% 
   rename(Z=Y,n=total,A1=admin1, A2=admin2)
 # add estimated number of total births per cluster
 alg_dat <- merge(alg_dat,frame.info,by=c('admin1.char','A1','U')) %>% dplyr::select(-M_bar,-n_clusters,-n_clusters_samp) %>%
@@ -276,7 +285,7 @@ Sigma <- cov(sampFull.draws)
 
 # Stan models ------
 
-standardmod.nofe <- cmdstan_model('Stan models/mod3.stan')
+standardmod.nofe <- cmdstan_model('/users/alanamcgovern/Desktop/Research/New_Benchmarking/Code/mod3.stan')
 
 list_dat <- list(lenA2=n_admin2,
                  lenC=nrow(alg_dat),
@@ -297,7 +306,7 @@ stan.fit1 <- standardmod.nofe$sample(
 out1 <- stan.fit1$draws(format='df',variables=c('alpha','b'))
 stan.nofe.samples <- exp(cbind(out1$`alpha[1]` + out1[,3:117],out1$`alpha[2]` + out1[,3:117]))
 
-standardmod <- cmdstan_model('Simulation_Study/Model_compare.stan')
+standardmod <- cmdstan_model('/users/alanamcgovern/Desktop/Research/New_Benchmarking/Code/Model_compare.stan')
 
 list_dat <- list(lenA1=n_admin1, lenA2=n_admin2,
                  lenC=nrow(alg_dat),
@@ -399,7 +408,7 @@ ZMB_data[[1]] <- list(M_init = solve(Sigma),
                                         pop_strata_dat = as.data.frame(pop_strata_dat),
                                         Q_scaled_inv=Q_nested_scaled_inv))
 
-save(ZMB_data,file = '/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Country Examples/ZMB_data.rda')
+save(ZMB_data,file = '/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Country Examples/ZMB_data_new.rda')
 
 # NUTS_5.4 <- postsamp_Alg5.4_NUTS_MCMC_onechain(eps0 = 0.04, 
 #                                         M_init = solve(Sigma),
@@ -414,8 +423,8 @@ save(ZMB_data,file = '/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Cou
 #load("Handcoded MCMC Simulations/Alg 5.4 240405, ZMB 2009-2013, 4 chains of 2k iterations.rda")
 
 ZMB_res <- NULL
-for(chain in 1:4){
-  res.tmp <- read.xlsx(paste0('Country Examples/ZMB/Results',chain,'.xlsx'))
+for(chain in c(1:4)){
+  res.tmp <- read.xlsx(paste0('/Users/alanamcgovern/Desktop/Research/New_Benchmarking/Country Examples/ZMB/Results/Results',chain,'.xlsx'))
   res.tmp$iter <- 1:nrow(res.tmp)
   ZMB_res <- rbind(ZMB_res, res.tmp)
 }
@@ -448,17 +457,17 @@ for(k in 1:n_admin1){
 
 # extract NUTS results ------
 
-raw.rates <- ZMB_res %>% filter(iter>1000 & iter < 2001) %>% dplyr::select(rU1:rR115)
+raw.rates <- ZMB_res %>% filter(iter>1000) %>% dplyr::select(rU1:rR115)
 
 admin2.samples <- as.matrix(raw.rates)%*%adm2_wt_mat
 
-admin2.res.bench <- data.frame(A2 = 1:n_admin2, 
+admin2.res.bench <- data.frame(admin2 = 1:n_admin2, 
                              bench.mean = apply(admin2.samples,2,mean),
                              bench.median = apply(admin2.samples,2,median),
                              bench.sd = apply(admin2.samples,2,sd),
                              bench.lower = apply(admin2.samples,2,quantile,prob = 0.05),
                              bench.upper = apply(admin2.samples,2,quantile,prob = 0.95))
-admin2.res.bench$admin2 <- paste0('admin2_',admin2.res.bench$A2)
+admin2.res.bench$admin2.char <- paste0('admin2_',admin2.res.bench$admin2)
 
 admin1.samples <- admin2.samples%*%adm1_wt_mat
 admin1.res.bench <- data.frame(admin1 = 1:n_admin1, 
@@ -481,8 +490,9 @@ admin1.res <- merge(admin1.dir,admin1.res.bench)
 #admin1.res <- merge(admin1.res,admin1.res.inla)
 admin1.res <- merge(admin1.res,admin1.res.stan)
 
-admin2.res <- merge(admin.key,admin2.res.bench,by.x='admin2',by.y = 'A2')
-admin2.res <- merge(area.order, admin2.res)
+admin2.res <- merge(admin.key,admin2.dir)
+admin2.res <- merge(admin2.res,area.order)
+admin2.res <- merge(admin2.res,admin2.res.bench)
 #admin2.res <- merge(admin2.res,admin2.res.inla)
 admin2.res <- merge(admin2.res,admin2.res.stan)
 
@@ -693,6 +703,7 @@ ggplot() + geom_point(aes(1000*admin2.res.stan$stan.lower,1000*admin2.res.bench$
 # Map plots of NMR =====
 poly.adm2$admin2 <- 1:nrow(poly.adm2)
 poly.adm2$admin2.char <- paste0('admin2_',poly.adm2$admin2)
+#poly.adm2 <- merge(poly.adm2,admin2.dir)
 poly.adm2 <- merge(poly.adm2,admin2.res)
 poly.adm2 <- merge(poly.adm2,admin1.dir,by.x='NAME_1',by.y='admin1.name')
 poly.adm2 <- merge(poly.adm2,admin2.res.stan.nofe)
@@ -734,7 +745,14 @@ dir.map <- map_template + geom_sf(data=poly.adm2,aes(fill=1000*admin1_mean),colo
   #geom_sf_label(data=poly.adm1,aes(label=NAME_1),alpha=0.5, label.size = NA,label.padding = unit(0.15, "lines")) +
   geom_label_repel(data=poly.adm1,aes(label=NAME_1,geometry=geometry),stat="sf_coordinates",
                    alpha=0.75,label.size=NA,label.padding = unit(0.15, "lines")) +
-  ggtitle('Direct estimates')
+  ggtitle('Admin 1 direct estimates')
+
+dir.map.admin2 <- map_template + geom_sf(data=poly.adm2,aes(fill=1000*admin2_mean),color='grey80',lwd=0.001) + 
+  geom_sf(fill = "transparent", size=1, color = "grey50", lwd=0.75, data = poly.adm2 %>% group_by(NAME_1) %>% summarise()) +
+  #geom_sf_label(data=poly.adm1,aes(label=NAME_1),alpha=0.5, label.size = NA,label.padding = unit(0.15, "lines")) +
+  geom_label_repel(data=poly.adm1,aes(label=NAME_1,geometry=geometry),stat="sf_coordinates",
+                   alpha=0.75,label.size=NA,label.padding = unit(0.15, "lines")) +
+  ggtitle('Admin 2 direct estimates')
 
 bench.map <- map_template +  geom_sf(data=poly.adm2,aes(fill=1000*bench.median),color='grey80') + 
   geom_sf(fill = "transparent", color = "grey50", lwd=0.75, data = poly.adm2 %>% group_by(NAME_1) %>% summarise()) +
@@ -743,11 +761,24 @@ bench.map <- map_template +  geom_sf(data=poly.adm2,aes(fill=1000*bench.median),
   ggtitle('DABUL model')
 
 
-ggarrange(plotlist=list(unbench.map.nofe,unbench.map,dir.map),common.legend = T,legend='bottom',nrow=1)
+ggarrange(plotlist=list(unbench.map.nofe,unbench.map,dir.map,dir.map.admin2),common.legend = T,legend='bottom',nrow=2,ncol=2)
 ggarrange(plotlist=list(unbench.map,bench.map),common.legend = T,legend='bottom')
 
 
 
 
 # testing ======
+
+admin2.res %>% ggplot() + 
+  geom_line(aes(admin2.ordered,bench.sd/bench.median,col='Bench')) +
+  geom_line(aes(admin2.ordered,stan.sd/stan.median,col='No Bench')) +
+  theme_bw() +
+  ylab('Coefficient of variation') + xlab('Second administrative area (in order of NMR estimate)') +
+  theme(legend.position = 'bottom', axis.text.x = element_blank(), 
+        axis.title = element_text(size=12),
+        axis.text.y = element_text(size=12), legend.text = element_text(size=10)) +
+ # scale_y_continuous(breaks = c(0.15,0.2,0.25,0.3,0.35)) +
+  scale_colour_manual(name = '', values =c('No Bench'=colors[1],'Bench'=colors[3]),
+                      labels=c('No Bench'='Standard unit-level nested','Bench'='DABUL'))
+
 
