@@ -406,7 +406,7 @@ postsamp_Alg5.4Exact_NUTS_MCMC_onechain <- function(alpha_tau = 0.01, U_tau = 1,
     data$rho[j]*rhyper(2e3,data$Y[j],data$N[j]-data$Y[j],data$n[j])
   })
   
- start.time <- Sys.time()
+  #start.time <- Sys.time()
   for(i in 2:n_iter){
     # draw regression parameters using NUTS -----
     cons_params$data_table <- data
@@ -502,7 +502,7 @@ postsamp_Alg5.4Exact_NUTS_MCMC_onechain <- function(alpha_tau = 0.01, U_tau = 1,
         #   kde <- density(ED_samples,bw=bw.SJ(ED_samples),from=r_hat-0.01,to=r_hat+0.01)
         #   term3 <- -1*log(kde$y[which.min(abs(kde$x - r_hat))])
         # }
-
+        
         # exit if we exceed reasonable domain (i.e. P(r_D|y,Y) is near 0)
         if(term3==Inf){
           if(length(f)==0){
@@ -513,8 +513,18 @@ postsamp_Alg5.4Exact_NUTS_MCMC_onechain <- function(alpha_tau = 0.01, U_tau = 1,
         f <- c(f,term1 + term2 + term3)
         
         del_f <- f-mean(f) #normalize
-        target_density <- (exp(del_f)/sum(exp(del_f)))
+        #restrict domain to densities >0
+        inf_dens <- which(exp(del_f)==Inf)
+        while(length(inf_dens)>0){
+          ids <- min(which(del_f>0.01*max(del_f))):max(which(del_f>0.01*max(del_f)))
+          f[-ids] <- NA
+          del_f <- f-mean(f,na.rm = T)
+          inf_dens <- which(exp(del_f)==Inf)
+        }
+        target_density <- (exp(del_f)/sum(exp(del_f),na.rm = T))
+        target_density[is.na(target_density)] <- 0
         target_F <- cumsum(target_density)
+        
         #can stop once we have approximated CDF
         if(length(f)>1){
           if(diff(tail(target_F,2)) < 0.01){
@@ -532,7 +542,7 @@ postsamp_Alg5.4Exact_NUTS_MCMC_onechain <- function(alpha_tau = 0.01, U_tau = 1,
     data[, ':='(Y=unlist(Y_current))]
     Y_sum_obs_current <- (data[, sum(Y),by=A1][order(A1)])$V1
   }
- Sys.time() - start.time 
+  #Sys.time() - start.time 
  
   #combine chains
   beta_postsamp <- cbind(0,reg_params_postsamp[,6:(4+n_admin1)])
